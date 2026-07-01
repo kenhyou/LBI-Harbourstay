@@ -12,8 +12,8 @@ Authoritative product spec: **`prd-harbourstay-booking-platform.md`** (moves to 
 
 ## Current state (keep this updated)
 
-- Exists: the PRD, and the `.claude/` tooling.
-- Not yet: the monorepo is **not scaffolded**; `docs/strategic-design/STRATEGIC.md` and `docs/DESIGN.md` do **not** exist yet.
+- Exists: the PRD, the `.claude/` tooling, and **`docs/strategic-design/STRATEGIC.md`** (Strategic Design complete — 9 BCs, Context Map, Ubiquitous Language).
+- Not yet: the monorepo is **not scaffolded**; `docs/DESIGN.md` (Tactical Design) does **not** exist yet.
 
 ## How you work here (Claude-specific tooling)
 
