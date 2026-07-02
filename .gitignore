@@ -41,3 +41,7 @@ Thumbs.db
 
 # Claude Code machine-local settings (keep shared skills/agents tracked)
 .claude/settings.local.json
+
+# career-hub MCP wiring (machine-local; points at the private career vault — never publish)
+.mcp.json
+.career-hub.json
