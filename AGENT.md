@@ -14,8 +14,9 @@ Authoritative product spec: **`prd-harbourstay-booking-platform.md`** (or `docs/
 
 ## Current state
 
-- Exists: the PRD and the reference docs under `.claude/skills/fullstack-build/references/`.
-- Not yet (as of writing): the monorepo is not scaffolded; `docs/strategic-design/STRATEGIC.md` and `docs/DESIGN.md` do not exist. Verify on disk before relying on this.
+- Exists: the PRD, the reference docs under `.claude/skills/fullstack-build/references/`, `docs/strategic-design/STRATEGIC.md`, and `docs/DESIGN.md`.
+- **P0 done** (branch `p0-scaffold`): Turborepo + pnpm monorepo scaffolded — `apps/api` (NestJS 11, SWC, `GET /health`), `apps/web` (Next 16 RSC health page), `packages/shared` (Zod contract), Prisma + docker-compose Postgres (not wired into the app yet), CI, ADRs 0001–0003. `/health` verified end-to-end; `pnpm build/typecheck/test/lint` green locally. See `docs/build/PROGRESS.md`.
+- Next: **S1 — Listing search & detail** (CQRS read model). Verify on disk before relying on this.
 
 ## The process to follow
 

@@ -2,10 +2,10 @@
 
 > An OTA (online travel agency) platform for booking short stays & tours — built as a full-stack, Domain-Driven Design exercise on a real, hard problem: **preventing overbooking and confirming payment reliably.**
 
-<!-- Badges (added at P0): CI · coverage · live web · live api -->
-<!-- ![CI](…) ![coverage](…) [web](…) [api](…) -->
+[![CI](https://github.com/kenhyou/LBI-Harbourstay/actions/workflows/ci.yml/badge.svg)](https://github.com/kenhyou/LBI-Harbourstay/actions/workflows/ci.yml)
+<!-- coverage · live web · live api badges added when deployed (S4 cut line) -->
 
-**Status:** 🏗️ Design complete, implementation not yet started. Strategic + Tactical Design are done and committed; the monorepo is scaffolded at the first build milestone (P0). See [Roadmap](#roadmap).
+**Status:** 🏗️ P0 in progress — monorepo scaffolded; `/health` runs end-to-end (NestJS → shared contract → Next.js RSC), Postgres + Prisma wired, CI green. Strategic + Tactical Design complete. See [Roadmap](#roadmap).
 
 ---
 

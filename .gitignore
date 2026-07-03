@@ -11,6 +11,9 @@ build/
 out/
 .turbo/
 *.tsbuildinfo
+# ...but keep the build-progress log (docs/build/) tracked
+!docs/build/
+!docs/build/**
 
 # Test / coverage
 coverage/

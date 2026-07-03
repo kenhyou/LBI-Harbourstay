@@ -1,0 +1,12 @@
+// Harbourstay Prisma schema.
+// P0 lays only the datasource + client generator; domain tables (Listing,
+// Booking, User, ...) arrive with their slices from S1 on, each in its own migration.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

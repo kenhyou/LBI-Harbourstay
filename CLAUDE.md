@@ -13,7 +13,8 @@ Authoritative product spec: **`prd-harbourstay-booking-platform.md`** (moves to 
 ## Current state (keep this updated)
 
 - Exists: the PRD, the `.claude/` tooling, **`docs/strategic-design/STRATEGIC.md`** (9 BCs, Context Map, UL), and **`docs/DESIGN.md`** (Tactical Design complete through the P0–S4 cut line).
-- Not yet: the monorepo is **not scaffolded**. Ready for `/fullstack-build` (start at P0).
+- **P0 done** (branch `p0-scaffold`): Turborepo + pnpm monorepo scaffolded — `apps/api` (NestJS 11, SWC, `GET /health`), `apps/web` (Next 16 RSC health page), `packages/shared` (Zod contract), Prisma + docker-compose Postgres (not wired into the app yet), CI, ADRs 0001–0003. `/health` verified end-to-end; `pnpm build/typecheck/test/lint` green locally. See `docs/build/PROGRESS.md`.
+- Next: **S1 — Listing search & detail** (CQRS read model). Wires `PrismaModule`, adds the first migration + seed.
 
 ## How you work here (Claude-specific tooling)
 
