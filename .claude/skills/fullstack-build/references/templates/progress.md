@@ -1,6 +1,7 @@
 # Harbourstay Build Progress
 
 > Lives at `docs/build/PROGRESS.md`. Updated at the end of every slice. One row per slice; newest note at the bottom of each slice block.
+> This file is the **single source of truth for build state** — never record state in CLAUDE.md / AGENT.md; they carry only the rules and point here.
 
 ## Status at a glance
 
@@ -15,6 +16,8 @@
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
+Branch: `<current working branch>`.
+**Next up: <slice id — title>** (<one line: BC + what it delivers; note the fill-plan focus>).
 Deployed: web `<url>` · api `<url>` · db `<provider>`. CI: `<badge/link>`.
 
 ---
@@ -26,6 +29,7 @@ Deployed: web `<url>` · api `<url>` · db `<provider>`. CI: `<badge/link>`.
 - **Contract added:** `packages/shared/src/contracts/<file>.ts` — <schemas>
 - **Backend:** <endpoints, aggregates/handlers touched>
 - **Frontend:** <routes/components touched>
+- **User implemented (fill plan):** <which files Ken wrote, how many red→green cycles, review must-fix count; or "opt-out recorded: <reason>">
 - **Definition of Done:**
   - [ ] contract shared, imported both ends, no duplicate type
   - [ ] `tsc --noEmit` clean

@@ -10,20 +10,20 @@ You do **not** have this repo's Claude-specific skills or subagents (those live 
 
 **Harbourstay** — a full-stack OTA (short-stay accommodation & tour) booking platform. This repo root **is** the implementation repo: design docs and all code live here (a Turborepo monorepo, scaffolded in-place).
 
+**The primary purpose is teaching Ken (the user) to write full-stack code**; the app is the vehicle. From S2 on, the build runs in **scaffold-and-fill** mode: the AI scaffolds each slice (contract, wiring, infra, complete failing tests) and stubs the designated core files (`// TODO(you)`); **Ken implements those fill files** (domain models, command/query handlers, key frontend components); the AI reviews his diff (comments, not rewrites) and verifies. Never implement Ken's fill files for him — not to fix a red test, not for speed. (P0–S1 predate this mode and were AI-written.)
+
 Authoritative product spec: **`prd-harbourstay-booking-platform.md`** (or `docs/PRD.md` after scaffolding). Read it for the domain, stack (§8), architecture (§7), and milestones (§12).
 
 ## Current state
 
-- Exists: the PRD, the reference docs under `.claude/skills/fullstack-build/references/`, `docs/strategic-design/STRATEGIC.md`, and `docs/DESIGN.md`.
-- **P0 done** (branch `p0-scaffold`): Turborepo + pnpm monorepo scaffolded — `apps/api` (NestJS 11, SWC, `GET /health`), `apps/web` (Next 16 RSC health page), `packages/shared` (Zod contract), Prisma + docker-compose Postgres (not wired into the app yet), CI, ADRs 0001–0003. `/health` verified end-to-end; `pnpm build/typecheck/test/lint` green locally. See `docs/build/PROGRESS.md`.
-- Next: **S1 — Listing search & detail** (CQRS read model). Verify on disk before relying on this.
+**Lives in `docs/build/PROGRESS.md`** — read the *Status at a glance* table and the newest slice block (each ends with a `Next:` line) before starting any build work, and verify on disk before relying on it. Do **not** record build state in this file; update `PROGRESS.md` instead. This file changes only when the rules change, not when a slice lands.
 
 ## The process to follow
 
 The build is a **vertical-slice curriculum**: each step ships full working code on both ends and must run before the next begins. The Claude tooling automates it, but the source of truth is plain Markdown you should read:
 
 - **What to build, in what order** → `.claude/skills/fullstack-build/references/curriculum.md` (P0 scaffold, then slices S1–S7 mapped to PRD milestones §12).
-- **How to build each slice** → `.claude/skills/fullstack-build/references/slice-recipe.md` (the repeatable rhythm + code skeletons): **contract → backend → frontend → integrate & verify.**
+- **How to build each slice** → `.claude/skills/fullstack-build/references/slice-recipe.md` (the repeatable rhythm + code skeletons): **contract → skeleton → Ken codes the fill files → review → integrate & verify.**
 - **Folder/file naming & layer rules** → `.claude/skills/fullstack-build/references/conventions.md` (authoritative).
 - **Design inputs** → `docs/strategic-design/STRATEGIC.md` (Bounded Contexts, Context Map, Ubiquitous Language) and `docs/DESIGN.md` (Aggregates, VOs, use cases). If these are missing, do the design first (or ask the user) — do not invent the domain model.
 
@@ -36,7 +36,7 @@ Overall pipeline: `PRD → STRATEGIC.md → DESIGN.md → build slice by slice`.
 1. **Contract-first.** Request/response types are Zod schemas in `packages/shared` (the Shared Kernel), imported by **both** `apps/web` and `apps/api`. Never duplicate a contract type on either end.
 2. **Backend keeps the hexagon.** `apps/api` domain layer has **zero** framework/ORM imports; Prisma lives only in `infra/`, behind repository ports. The CQRS **read path bypasses the domain** (query handlers project Prisma rows straight into Read Models — no aggregate reconstitution). Ports are `abstract class`. Keep transaction primitives out of `application/`.
 3. **Frontend:** Next.js App Router, Server Components by default; client components only for interactivity (React Hook Form + Zod, TanStack Query, Stripe Element). Auth via an **httpOnly cookie**, guarded server-side. Import the shared contract for both types and form validation.
-4. **Every slice runs.** Full working code — no stubs, no TODOs. Verify by **running** (curl every endpoint, happy + error paths; drive the UI) — not by assuming.
+4. **Every slice runs.** Full working code — the only permitted stubs are the `TODO(you)` fill files while Ken is implementing them; a slice is never recorded done half-wired. Verify by **running** (curl every endpoint, happy + error paths; drive the UI) — not by assuming.
 5. **Tests during the slice** (test pyramid, PRD §13): domain unit tests with **zero mocks** (positive **and** negative per state transition) → integration tests against real Postgres via Testcontainers → Playwright for headline journeys. `tsc --noEmit` is a separate gate from the test run.
 6. **Decisions become ADRs** under `adr/` (PRD needs ≥3): why CQRS, why Prisma-behind-a-port, the overbooking mechanism, the Outbox, the Stripe ACL.
 
@@ -62,4 +62,4 @@ adr/                                   # Architecture Decision Records
 
 ## Honesty
 
-Report what actually happened: if tests fail, say so with the output; if you could not verify something (e.g. a Stripe webhook without the CLI), say that explicitly rather than claiming it passed. Update `docs/build/PROGRESS.md` and the **Current state** notes when you change things.
+Report what actually happened: if tests fail, say so with the output; if you could not verify something (e.g. a Stripe webhook without the CLI), say that explicitly rather than claiming it passed. Record what you change in `docs/build/PROGRESS.md` (never in this file or CLAUDE.md).

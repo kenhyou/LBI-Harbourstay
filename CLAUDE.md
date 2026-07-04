@@ -8,13 +8,13 @@ Guidance for **Claude Code** working in this repo. Other LLM agents (e.g. Gemini
 
 **Harbourstay** — a full-stack OTA (short-stay accommodation & tour) booking platform, built here with an AI agent's guidance. This repo root **is** the implementation repo: Strategic Design, Tactical Design, and all the code live here (the Turborepo monorepo is scaffolded in-place).
 
+**The primary purpose is teaching Ken to write full-stack code** — backend to frontend; the app is the vehicle. From S2 on, the build runs in **scaffold-and-fill** mode: agents scaffold each slice and write failing tests; **Ken implements the designated core files** (domain models, command/query handlers, key frontend components); agents review his diff (comments, not rewrites) and verify. Never implement Ken's fill files for him — not to fix a test, not for speed. Details: the `fullstack-build` skill §Scaffold-and-Fill. (P0–S1 predate this mode and were agent-written.)
+
 Authoritative product spec: **`prd-harbourstay-booking-platform.md`** (moves to `docs/PRD.md` once scaffolded). It defines the domain, stack (§8), architecture (§7), and milestones (§12).
 
-## Current state (keep this updated)
+## Current state
 
-- Exists: the PRD, the `.claude/` tooling, **`docs/strategic-design/STRATEGIC.md`** (9 BCs, Context Map, UL), and **`docs/DESIGN.md`** (Tactical Design complete through the P0–S4 cut line).
-- **P0 done** (branch `p0-scaffold`): Turborepo + pnpm monorepo scaffolded — `apps/api` (NestJS 11, SWC, `GET /health`), `apps/web` (Next 16 RSC health page), `packages/shared` (Zod contract), Prisma + docker-compose Postgres (not wired into the app yet), CI, ADRs 0001–0003. `/health` verified end-to-end; `pnpm build/typecheck/test/lint` green locally. See `docs/build/PROGRESS.md`.
-- Next: **S1 — Listing search & detail** (CQRS read model). Wires `PrismaModule`, adds the first migration + seed.
+**Lives in [docs/build/PROGRESS.md](docs/build/PROGRESS.md)** — read the *Status at a glance* table and the newest slice block (each ends with a `Next:` line) at the start of any build work. Do **not** record build state in this file; update `PROGRESS.md` instead. This file changes only when the *rules* change (invariants, tooling, process), not when a slice lands.
 
 ## How you work here (Claude-specific tooling)
 
@@ -28,7 +28,7 @@ PRD ──/strategic-design──▶ docs/strategic-design/STRATEGIC.md
 
 - **`/strategic-design`** — DDD Strategic Design (Bounded Contexts, Context Map, Ubiquitous Language) via a four-role debate. The *user* decides at every phase.
 - **`/fullstack-build`** — builds the app in vertical slices (contract → backend → frontend → verify), driven by [.claude/skills/fullstack-build/references/curriculum.md](.claude/skills/fullstack-build/references/curriculum.md).
-- You (main thread) **plan and sequence**; the subagents (`contract-designer`, `backend-engineer`, `frontend-engineer`, `integration-verifier`) **execute**. Agents never decide what comes next or whether a slice is done.
+- You (main thread) **plan, sequence, and coach**; the subagents (`contract-designer`, `backend-engineer`, `frontend-engineer`, `integration-verifier`) **scaffold, review, and verify**; **Ken writes the fill files**. Agents never decide what comes next, whether a slice is done, or take over Ken's code.
 - **Never auto-advance.** Finish a slice, verify it, record it in `docs/build/PROGRESS.md`, then stop for the user's confirmation.
 
 ## Non-negotiable invariants
@@ -61,4 +61,4 @@ adr/                                   # Architecture Decision Records
 - **Deploy early, stay green.** §12: deploy from P0; `main` always green.
 - Out of scope (defend it): multi-tenancy, deep security/compliance, real settlement, native mobile (§2, §6).
 
-When you start real work, update **Current state** above and `docs/build/PROGRESS.md`.
+When you finish real work, record it in `docs/build/PROGRESS.md` — never here.
