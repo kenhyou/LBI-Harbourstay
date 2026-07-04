@@ -13,7 +13,11 @@
     "prisma:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
+    "db:seed": "prisma db seed",
     "db:studio": "prisma studio"
+  },
+  "prisma": {
+    "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   },
   "dependencies": {
     "@harbourstay/shared": "workspace:*",
@@ -37,6 +41,7 @@
     "@nestjs/testing": "11.1.27",
     "@swc/cli": "0.8.1",
     "@swc/core": "1.15.43",
+    "@testcontainers/postgresql": "10.13.2",
     "@types/jest": "30.0.0",
     "@types/node": "26.1.0",
     "@types/supertest": "7.2.0",

@@ -1,6 +1,11 @@
 // Harbourstay Prisma schema.
-// P0 lays only the datasource + client generator; domain tables (Listing,
-// Booking, User, ...) arrive with their slices from S1 on, each in its own migration.
+// P0 laid only the datasource + client generator. S1 introduces the first two
+// tables — Listing + AvailabilityBlock — that back BC-5's CQRS read side.
+//
+// NOTE: this is the shared physical store. BC-2 (Availability & Inventory, the
+// write side) is the CANONICAL owner of these tables; BC-5 only reads/projects
+// off them. The overbooking EXCLUDE constraint on Hold (BC-2 write side) is OUT
+// of scope for S1 and arrives with S3.
 
 generator client {
   provider = "prisma-client-js"
@@ -9,4 +14,56 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum ListingType {
+  stay
+  tour
+}
+
+enum ListingStatus {
+  Published
+  Unpublished
+}
+
+/// Canonical bookable unit (BC-2 owns writes; BC-5 projects read models off it).
+model Listing {
+  id          String        @id @default(uuid()) @db.Uuid
+  hostId      String        @db.Uuid
+  title       String
+  description String
+  type        ListingType   @default(stay)
+  location    String
+  capacity    Int
+  /// Stored in minor units (integer). "From" price surfaced on the search card.
+  basePrice   Int
+  images      String[]      @default([])
+  status      ListingStatus @default(Published)
+  createdAt   DateTime      @default(now())
+
+  availabilityBlocks AvailabilityBlock[]
+
+  // Hits the search NFR (p95 < 500ms): search always filters status = Published
+  // and often by location.
+  @@index([status, location])
+  @@map("listing")
+}
+
+/// Availability calendar rows. S1 uses these only to compute the *indicative*
+/// availability hint (approximate — re-verified at booking time in S3). No
+/// overbooking constraint here; that lives on Hold (BC-2 write side, S3).
+model AvailabilityBlock {
+  id        String   @id @default(uuid()) @db.Uuid
+  listingId String   @db.Uuid
+  checkIn   DateTime @db.Date
+  checkOut  DateTime @db.Date
+  /// Optional per-range price override (minor units). Unused by S1 search.
+  price     Int?
+  /// true = the host has blocked this range (unavailable).
+  isBlocked Boolean  @default(false)
+
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId, checkIn, checkOut])
+  @@map("availability_block")
 }

@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { LoggerModule } from 'nestjs-pino';
+import { PrismaModule } from '@/infra/prisma/prisma.module';
 import { HealthModule } from '@/health/health.module';
+import { CatalogModule } from '@/catalog/catalog.module';
 
 @Module({
   imports: [
@@ -14,7 +16,9 @@ import { HealthModule } from '@/health/health.module';
             : { target: 'pino-pretty', options: { singleLine: true } },
       },
     }),
+    PrismaModule,
     HealthModule,
+    CatalogModule,
   ],
 })
 export class AppModule {}
