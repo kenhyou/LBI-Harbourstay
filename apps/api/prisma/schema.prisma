@@ -16,6 +16,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// BC-7 account role (guest|host|admin). `admin` is never self-registerable.
+enum UserRole {
+  guest
+  host
+  admin
+}
+
 enum ListingType {
   stay
   tour
@@ -24,6 +31,19 @@ enum ListingType {
 enum ListingStatus {
   Published
   Unpublished
+}
+
+/// BC-7 Identity & Access. The `User` aggregate's physical store. `email` is
+/// unique (the registration invariant); `passwordHash` is never returned to the
+/// client (the API projects the SAFE AuthUser shape at the boundary).
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(guest)
+  createdAt    DateTime @default(now())
+
+  @@map("user")
 }
 
 /// Canonical bookable unit (BC-2 owns writes; BC-5 projects read models off it).
