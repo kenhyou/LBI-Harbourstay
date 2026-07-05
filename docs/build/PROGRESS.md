@@ -9,15 +9,15 @@
 |---|---|---|---|
 | P0 Scaffold | P0 | ☑ done | local `pnpm dev` — `/health` end-to-end; CI green locally |
 | S1 Listing search & detail | P1 | ☑ done | `/listings` search + `/listings/:id` detail over seeded Postgres; 15 api tests + 5 Playwright green |
-| S2 Auth | M1 | ☐ | |
+| S2 Auth | M1 | ☑ done | register/login → httpOnly-cookie JWT session, RBAC guard; **Ken wrote the domain layer**; 77 api tests + 4 Playwright green |
 | S3 Availability + Booking Hold | P2 | ☐ | |
 | S4 Payment Saga | P3 | ☐ | **cut line** |
 | S5 My bookings + cancel | M5 | ☐ | |
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
-Branch: `p0-scaffold`.
-**Next up: S2 — Authentication & Roles** (Identity & Access: register/login, JWT in an httpOnly cookie, RBAC). First slice in **scaffold-and-fill** mode — Ken implements the fill files. S3 depends on S1 + S2.
+Branch: `s2-auth` (off `main`; not yet committed at time of writing).
+**Next up: S3 — Availability + Booking Hold** (Booking + Inventory write side: create a Hold with overbooking prevention under concurrency — the hard slice). Depends on S1 + S2, both done. Scaffold-and-fill: Ken's fill files will be the `Booking`/`Hold` domain + the state machine.
 Deployed: web `<deferred to S4>` · api `<deferred to S4>` · db local docker-compose Postgres 16.
 CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch for now).
 
@@ -106,3 +106,53 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
 - **Next:** S2 — Authentication & Roles (Identity & Access): register/login with JWT in an httpOnly
   cookie, `RolesGuard` + `@Roles()`; **or** S3 — Availability + Booking Hold (needs S1 + S2). Per the
   dependency graph S3 requires a signed-in guest, so S2 comes next.
+
+---
+
+## S2 — Authentication & Roles  *(first scaffold-and-fill slice)*
+
+- **Shipped:** a visitor can **register** and **log in**; the JWT session rides in an **httpOnly cookie**
+  (access + refresh) and survives reloads; a `RolesGuard`/`@Roles()` gates protected routes. BC-7 Identity
+  & Access (Generic).
+- **Learning mode:** first slice built scaffold-and-fill. Agents scaffolded the whole BC + frontend and
+  wrote failing unit tests; **Ken implemented the domain layer** himself.
+- **Contract added:** `packages/shared/src/contracts/auth.ts` — `role`, `registerRequest`, `loginRequest`,
+  `authUser` (+ types). No token shape in the contract (JWT is an infra/cookie concern).
+- **Backend (`apps/api`, `identity` BC):** `RegisterUser`/`LoginUser`/`RefreshToken` command handlers +
+  `GetCurrentUser` query; ports `UserRepositoryPort` / `PasswordHasherPort` (bcrypt, cost 12) /
+  `AuthTokenPort` (JWT access+refresh, separate secrets); Prisma `User` repo + mapper + safe read
+  projection; presenters `POST /auth/register|login|refresh` (set httpOnly cookies) + guarded `GET /auth/me`;
+  `RolesGuard` + `@Roles()` + `JwtCookieGuard`; migration `20260704120152_s2_identity` (`user` table,
+  UNIQUE email). Hashing/JWT never touch the domain.
+- **User implemented (fill plan):** **Ken wrote the entire domain layer** — `domain/vo/email.vo.ts`
+  (validate + normalize + value-equality), `domain/models/user.model.ts` (`User` aggregate, `create`/
+  `reconstitute`, self-added+tested `passwordHash` invariant, defensive-copied `createdAt`), and the 3
+  domain exceptions (`EmailAlreadyInUse` / `InvalidCredentials` — deliberately generic, no user
+  enumeration / `UserNotFound`). Drove `email.vo.spec.ts` + `user.model.spec.ts` from red to green.
+  Coaching produced real fixes: dropped a redundant guard, kept+tested the credential invariant, and
+  learned `toBe` vs `toStrictEqual` (reference vs value) when the defensive copy broke an over-strict test.
+  Backend-engineer review: **0 must-fix, 4 nits** (createdAt copy + test-name accuracy applied; explicit
+  `node:crypto` import + `equals` null-guard left as optional).
+- **Frontend (`apps/web`):** `/login`, `/signup` (RHF + `zodResolver`, guest/host choice), `/account`
+  (server-guarded); cookie-bridge route handlers under `app/api/auth/` (relay the API's `Set-Cookie` to the
+  web origin, strip `Domain`); server-side `getCurrentUser()`/`requireUser()` session helpers; header
+  reflecting auth state + logout. All full working code (no fill files on the frontend this slice).
+- **Definition of Done:**
+  - [x] contract shared, imported both ends, no duplicate type
+  - [x] `tsc --noEmit` clean (api + web)
+  - [x] domain zero framework/ORM imports (grep-verified); passwords hashed behind a port; `AuthUser`
+        never leaks `passwordHash`
+  - [x] tests green — api: **16 suites / 77 tests** (Ken's domain specs + Testcontainers repo/query +
+        `auth.controller.e2e`); web: Playwright auth journey **4/4**
+  - [x] both apps run; register → login → stay-logged-in-across-reload → guarded route works in the
+        browser; tokens httpOnly; invalid login generic (no enumeration)
+- **Verifier result:** PASS (first pass) — register 201 (+httpOnly cookies, no `passwordHash`), duplicate 409,
+  short password 400, login 200, wrong-password vs unknown-email both 401 with **byte-identical** bodies,
+  `/auth/me` 200/401, refresh 200. Playwright 4/4.
+- **ADRs:** `adr/0006-jwt-httponly-cookie-session-and-bcrypt.md` (httpOnly-cookie JWT transport,
+  access+refresh with separate secrets, bcrypt cost 12).
+- **Deferred (not S2 scope):** `RolesGuard` is wired + unit-tested but its first real use is S6 (host RBAC);
+  password reset / email verification / account settings out of scope; public deploy (S4).
+- **Next:** S3 — Availability + Booking Hold (the hard one): `Booking` + `Hold` aggregates, the state
+  machine, and overbooking prevention under concurrency (Postgres `EXCLUDE` vs optimistic `version` — an
+  ADR). Ken's fill files: the domain (aggregates + `DateRange` VO + state transitions).
