@@ -5,7 +5,7 @@
 [![CI](https://github.com/kenhyou/LBI-Harbourstay/actions/workflows/ci.yml/badge.svg)](https://github.com/kenhyou/LBI-Harbourstay/actions/workflows/ci.yml)
 <!-- coverage · live web · live api badges added when deployed (S4 cut line) -->
 
-**Status:** 🏗️ P0 in progress — monorepo scaffolded; `/health` runs end-to-end (NestJS → shared contract → Next.js RSC), Postgres + Prisma wired, CI green. Strategic + Tactical Design complete. See [Roadmap](#roadmap).
+**Status:** 🏗️ Building — **P0–S2 shipped**: monorepo scaffold, listing search & detail (CQRS read side), and auth & roles (JWT in an httpOnly cookie, RBAC) all run end-to-end with tests green. Next: S3 (booking Hold + overbooking prevention). Strategic + Tactical Design complete. See [Roadmap](#roadmap) and [build log](docs/build/PROGRESS.md).
 
 ---
 
@@ -92,25 +92,71 @@ Harbourstay is built with an AI agent's guidance, in three stages, each a commit
 
 Vertical slices mapped to the PRD milestones (§12); each ends deployable:
 
-- **P0** — monorepo scaffold, both apps running, CI green
-- **S1** — listing search & detail (CQRS read side)
-- **S2** — auth & roles (JWT, RBAC)
-- **S3** — availability + booking Hold (overbooking prevention proven under concurrency)
+- **P0** ✅ — monorepo scaffold, both apps running, CI green
+- **S1** ✅ — listing search & detail (CQRS read side)
+- **S2** ✅ — auth & roles (JWT, RBAC)
+- **S3** — availability + booking Hold (overbooking prevention proven under concurrency) ← next
 - **S4** — payment Saga + Outbox + confirmation email — **minimum deployable cut line** (search → reserve → pay → confirm)
 - **S5** — my bookings + cancel · **S6** — host dashboard · **S7** — hardening (E2E, OWASP baseline, ADRs, delivery metrics)
 
 ## Getting started
 
-> The monorepo is not scaffolded yet — these are the intended commands once P0 lands.
+**Prerequisites:** Node 20+, pnpm, and Docker (for Postgres and the integration tests).
 
 ```bash
 pnpm install
-docker compose up -d          # Postgres
-pnpm --filter api prisma migrate dev
-pnpm dev                      # web + api
+cp apps/api/.env.example apps/api/.env                        # DATABASE_URL etc. (JWT secrets have dev defaults)
+docker compose up -d db                                       # Postgres 16
+pnpm --filter @harbourstay/api exec prisma migrate deploy     # create the tables
+pnpm --filter @harbourstay/api exec prisma db seed            # demo listings
+pnpm dev                                                      # web :3000 + api :3001
 ```
 
-Run instructions, API docs (Swagger), and live deployment links will be filled in here as the build progresses.
+Then open **http://localhost:3000**. The API's Swagger docs are at **http://localhost:3001/docs**.
+
+## Testing
+
+Two layers — a fast Jest suite (unit + integration) and browser end-to-end with Playwright.
+
+### Unit + integration (Jest) — the everyday loop
+
+```bash
+pnpm test                                    # whole workspace
+pnpm --filter @harbourstay/api test          # just the backend
+pnpm --filter @harbourstay/api test -- --watch          # watch mode while coding
+pnpm --filter @harbourstay/api test email.vo.spec       # a single file by name
+```
+
+The backend suite is more than unit tests: it includes **Testcontainers** integration specs (a real Postgres spun up in a throwaway container) and API-level end-to-end specs (`*.e2e.spec.ts` — boots the Nest app + DB and drives full flows like `register → login → /me → refresh`). **Docker must be running** for these.
+
+### Browser end-to-end (Playwright)
+
+Playwright drives a real browser through the UI, so it needs the **API running + database ready**; it starts the web server itself.
+
+```bash
+pnpm --filter @harbourstay/web test:e2e:install              # one-time: fetch Chromium
+```
+
+Bring the stack up (DB + migrations + seed + API), then run the specs:
+
+```bash
+docker compose up -d db
+pnpm --filter @harbourstay/api exec prisma migrate deploy
+pnpm --filter @harbourstay/api exec prisma db seed
+pnpm --filter @harbourstay/api dev                          # terminal 1 — API on :3001, leave running
+pnpm --filter @harbourstay/web test:e2e                     # terminal 2 — auto-starts web, runs the specs
+```
+
+Useful variants:
+
+```bash
+pnpm --filter @harbourstay/web exec playwright test --headed   # watch it in a real browser
+pnpm --filter @harbourstay/web exec playwright test --ui       # interactive runner (great for debugging)
+pnpm --filter @harbourstay/web exec playwright test auth       # one suite (e.g. auth, listings)
+pnpm --filter @harbourstay/web exec playwright show-report     # HTML report after a run
+```
+
+Live deployment links will be added here at the S4 cut line.
 
 ## License
 
