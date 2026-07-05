@@ -160,4 +160,4 @@ Live deployment links will be added here at the S4 cut line.
 
 ## License
 
-Personal project. No license granted yet.
+[MIT](LICENSE) © 2026 Ken Hoegun You
