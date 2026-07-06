@@ -33,6 +33,26 @@ enum ListingStatus {
   Unpublished
 }
 
+/// BC-2 Hold lifecycle. `active` = tentative (TTL); `committed` = permanent
+/// (post-payment); `released`/`expired` = returned to supply. The overbooking
+/// EXCLUDE constraint applies only to ('active','committed') rows.
+enum HoldStatus {
+  active
+  committed
+  released
+  expired
+}
+
+/// BC-1 Booking lifecycle. Mirrors the shared contract `bookingStatus`.
+enum BookingStatus {
+  PendingPayment
+  Confirmed
+  Completed
+  Cancelled
+  Expired
+  NoShow
+}
+
 /// BC-7 Identity & Access. The `User` aggregate's physical store. `email` is
 /// unique (the registration invariant); `passwordHash` is never returned to the
 /// client (the API projects the SAFE AuthUser shape at the boundary).
@@ -86,4 +106,45 @@ model AvailabilityBlock {
 
   @@index([listingId, checkIn, checkOut])
   @@map("availability_block")
+}
+
+/// BC-2 Hold aggregate — a TTL-bound exclusive claim on a listing's date range.
+/// The overbooking invariant ("no two overlapping active/committed holds on a
+/// listing") spans multiple Hold rows, so NO aggregate can enforce it — it is a
+/// Postgres `EXCLUDE USING gist` constraint added by hand in the S3 migration
+/// (Prisma can't express it). A conflicting concurrent insert fails with SQLSTATE
+/// `23P01`, which the repository catches and rethrows as `OverlappingHoldException`.
+model Hold {
+  id        String     @id @default(uuid()) @db.Uuid
+  listingId String     @db.Uuid
+  checkIn   DateTime   @db.Date
+  checkOut  DateTime   @db.Date
+  status    HoldStatus @default(active)
+  expiresAt DateTime
+  createdAt DateTime   @default(now())
+
+  @@index([listingId, status])
+  @@map("hold")
+}
+
+/// BC-1 Booking aggregate — the guest's reservation commitment. References a
+/// Hold (BC-2), a guest (BC-7), and a Listing (BC-2) by plain id (no FK across
+/// aggregate boundaries). `priceSnapshot` is the all-in quoted total in minor
+/// units, frozen at creation. `holdExpiresAt` is denormalized from the Hold so
+/// the booking summary can surface the TTL without loading the Hold.
+model Booking {
+  id            String        @id @default(uuid()) @db.Uuid
+  guestId       String        @db.Uuid
+  listingId     String        @db.Uuid
+  holdId        String        @db.Uuid
+  checkIn       DateTime      @db.Date
+  checkOut      DateTime      @db.Date
+  partySize     Int
+  status        BookingStatus @default(PendingPayment)
+  priceSnapshot Int
+  holdExpiresAt DateTime
+  createdAt     DateTime      @default(now())
+
+  @@index([guestId])
+  @@map("booking")
 }

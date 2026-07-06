@@ -45,5 +45,8 @@ const queryHandlers = [GetCurrentUserHandler];
     ...commandHandlers,
     ...queryHandlers,
   ],
+  // Exported so other BCs (e.g. BC-1 Booking) can guard routes with the shared
+  // cookie auth without re-binding the AuthTokenPort.
+  exports: [JwtCookieGuard, AuthTokenPort],
 })
 export class IdentityModule {}
