@@ -10,14 +10,14 @@
 | P0 Scaffold | P0 | ☑ done | local `pnpm dev` — `/health` end-to-end; CI green locally |
 | S1 Listing search & detail | P1 | ☑ done | `/listings` search + `/listings/:id` detail over seeded Postgres; 15 api tests + 5 Playwright green |
 | S2 Auth | M1 | ☑ done | register/login → httpOnly-cookie JWT session, RBAC guard; **Ken wrote the domain layer**; 77 api tests + 4 Playwright green |
-| S3 Availability + Booking Hold | P2 | ☐ | |
+| S3 Availability + Booking Hold | P2 | ☑ done | reserve → Booking(PendingPayment) + Hold in one txn; overbooking prevented by Postgres `EXCLUDE` (proven under live concurrency); **Ken wrote the Booking domain + state machine**; 172 api tests + 3 Playwright green |
 | S4 Payment Saga | P3 | ☐ | **cut line** |
 | S5 My bookings + cancel | M5 | ☐ | |
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
-Branch: `s2-auth` (off `main`; not yet committed at time of writing).
-**Next up: S3 — Availability + Booking Hold** (Booking + Inventory write side: create a Hold with overbooking prevention under concurrency — the hard slice). Depends on S1 + S2, both done. Scaffold-and-fill: Ken's fill files will be the `Booking`/`Hold` domain + the state machine.
+Branch: `s3-booking-hold` (off `main`; not yet committed at time of writing).
+**Next up: S4 — Payment Saga + Outbox + Confirmation** (Payments + Notifications + Booking): Stripe **test-mode** PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms the booking + commits the Hold → Transactional Outbox emits `BookingConfirmed` → Notifications sends the email. **Minimum deployable cut line** — deploy web/api/db after this. Depends on S3 (done).
 Deployed: web `<deferred to S4>` · api `<deferred to S4>` · db local docker-compose Postgres 16.
 CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch for now).
 
@@ -156,3 +156,60 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
 - **Next:** S3 — Availability + Booking Hold (the hard one): `Booking` + `Hold` aggregates, the state
   machine, and overbooking prevention under concurrency (Postgres `EXCLUDE` vs optimistic `version` — an
   ADR). Ken's fill files: the domain (aggregates + `DateRange` VO + state transitions).
+
+---
+
+## S3 — Availability + Booking Hold  *(the hard one)*
+
+- **Shipped:** a signed-in guest reserves dates on a listing → creates a `Booking` (`PendingPayment`)
+  + a time-boxed `Hold` in **one transaction**; **overbooking is impossible** — enforced by a Postgres
+  `EXCLUDE` constraint, proven under real concurrency. BC-1 Booking + BC-2 Availability & Inventory,
+  in a Partnership.
+- **The headline guarantee:** `EXCLUDE USING gist (listingId =, daterange(checkIn,checkOut,'[)') &&)
+  WHERE status IN ('active','committed')` on `hold` (+ `btree_gist`). Concurrent overlapping insert →
+  `23P01` → `OverlappingHoldException` → 409. Verified live: two concurrent overlapping `POST /bookings`
+  → exactly one 201, one 409, one active hold in the DB. Half-open `[in,out)` → a checkout day and a
+  same-day check-in do NOT conflict. See **ADR-0007**.
+- **Contract added:** `packages/shared/src/contracts/booking.ts` — `bookingStatus`, `createBookingRequest`,
+  `bookingSummary` (`holdExpiresAt` drives the TTL countdown), `availabilityQuery`, `listingAvailability`.
+- **Backend (`apps/api`):** two BCs. `inventory/` (scaffold) — `Hold` aggregate + state machine, `EXCLUDE`
+  migration, `HoldRepository` (catches `23P01`), `PricingService` (basePrice×nights + fee), `GetAvailability`
+  read model. `booking/` — `CreateBooking` command handler (the Partnership seam), `BookingRepository`,
+  `POST /bookings` + `GET /bookings/:id` (ownership-scoped, 404 no-leak) + `GET /listings/:id/availability`.
+  First real use of the **transaction manager** (`@nestjs-cls/transactional`) — cross-aggregate write in one
+  `@Transactional`, application stays `$transaction`-free. Migration `20260705063337_s3_booking_hold`.
+- **User implemented (fill plan):** **Ken wrote the entire Booking domain** — `booking/domain/models/booking.model.ts`
+  (the `Booking` aggregate + full state machine: `confirm`/`complete`/`cancel(policy)`/`expire`/`markNoShow`,
+  each guard→mutate, no state-skipping, illegal moves throw `InvalidBookingStateException`), `date-range.vo.ts`
+  (half-open `overlaps`, `nights`, check-in<check-out), `party-size.vo.ts`, `money.vo.ts` (integer minor units),
+  and the 4 booking exceptions. Drove 6 spec suites red→green (21 state-machine tests alone), incl. making the
+  `create-booking.integration.spec` concurrency race pass. Review: **0 must-fix in the initial pass on the state
+  machine (praised as senior-level)**; 2 must-fix on the edges (a real `nights()` bug — used `getDate()`
+  day-of-month instead of timestamp math, broke across month boundaries; `Date` getters leaking mutable internals),
+  4 nits — all applied, and Ken added the cross-month regression test that the original spec lacked (172 tests).
+  Coaching lessons landed: `getDate` vs timestamp arithmetic; a fix and its test are one unit of work; test
+  coverage ≠ file coverage (two exceptions were unimplemented because no unit spec referenced them — caught by
+  the fuller suite).
+- **Frontend (`apps/web`):** hand-rolled accessible availability calendar (TanStack Query, disables `unavailable`
+  ranges, half-open boundary correct), booking widget (range + party size → reserve), cookie-forwarding
+  `POST /bookings` route handler (auth from S2), `/bookings/[id]` pending-payment page with a **live TTL countdown**
+  that survives reload, signed-out → `/login?next=`. No new deps.
+- **Definition of Done:**
+  - [x] contract shared both ends, no dup type
+  - [x] `tsc --noEmit` clean (api + web)
+  - [x] domain framework/ORM-free (Ken's `booking/domain` grep-clean; `@Injectable` on the `PricingService`
+        domain service is the documented-allowed exception — conventions §Backend layering); cross-aggregate write
+        in ONE transaction (no `$transaction` in application)
+  - [x] **concurrency proves zero double-booking** — Jest integration race + live two-request race both → exactly
+        one wins; `EXCLUDE` + `btree_gist` present in the DB
+  - [x] state machine cannot skip states (21/21 unit tests)
+  - [x] both apps run; reserve journey works in the browser (calendar disables taken dates, Hold shown with live
+        countdown, reload persists); 409 on overlap; signed-out redirect
+- **Verifier result:** PASS. (One flagged item — `@Injectable` in `pricing.service.ts` — reviewed and found
+  compliant with the documented convention that allows `@Injectable` on domain services; not a violation.)
+  Evidence: race `201`/`409` + single hold row; all curls (201/404/401/409/422/400); Playwright 3/3; 172 api tests.
+- **ADRs:** `adr/0007-overbooking-via-postgres-exclude-constraint.md` (DB `EXCLUDE` vs optimistic `version`).
+- **Deferred (not S3 scope):** actual payment/confirmation (S4 — Hold stays `Active`, Booking stays
+  `PendingPayment`); scheduled Hold-expiry job (S4/S5); cancel flow (S5); k6 load test (stretch).
+- **Next:** S4 — Payment Saga + Outbox + Confirmation (Stripe test mode → webhook → saga confirms + commits Hold →
+  Outbox → email). The **minimum deployable cut line**.
