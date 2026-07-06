@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getListing, ListingNotFoundError } from '@/lib/api/listings';
 import { ListingGallery } from '@/components/listing-gallery';
-import { formatPrice } from '@/lib/format';
+import { BookingWidget } from '@/components/booking-widget';
+import { getCurrentUser } from '@/lib/auth/session';
 
 // Always fetch fresh from the live read model.
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,10 @@ export default async function ListingDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+
+  // Server-read session: signed-out guests get a "Log in to reserve" button that
+  // routes to /login?next= rather than attempting a doomed POST.
+  const user = await getCurrentUser();
 
   let listing;
   try {
@@ -77,37 +82,12 @@ export default async function ListingDetailPage({
         </section>
 
         <aside className="h-fit rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <p className="text-2xl font-bold text-gray-900">
-            {formatPrice(listing.basePrice)}
-            <span className="text-sm font-normal text-gray-500"> / night</span>
-          </p>
-
-          {listing.indicativeAvailable !== undefined && (
-            <div
-              data-testid="indicative-availability"
-              className="mt-4 rounded-lg border p-3 text-sm"
-              style={{
-                borderColor: listing.indicativeAvailable ? '#bbf7d0' : '#fecaca',
-                backgroundColor: listing.indicativeAvailable
-                  ? '#f0fdf4'
-                  : '#fef2f2',
-              }}
-              role="status"
-            >
-              <p className="font-medium text-gray-900">
-                {listing.indicativeAvailable
-                  ? 'Looks available for your dates'
-                  : 'May not be available for your dates'}
-              </p>
-              <p className="mt-1 text-xs text-gray-600">
-                Indicative only — availability is confirmed at checkout.
-              </p>
-            </div>
-          )}
-
-          <p className="mt-4 text-xs text-gray-400">
-            Booking opens in a later step. This is a preview of the listing.
-          </p>
+          <BookingWidget
+            listingId={listing.id}
+            capacity={listing.capacity}
+            basePrice={listing.basePrice}
+            isAuthenticated={user !== null}
+          />
         </aside>
       </div>
     </main>
