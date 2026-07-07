@@ -34,5 +34,9 @@ const queryHandlers = [GetBookingHandler];
     ...commandHandlers,
     ...queryHandlers,
   ],
+  // Exported so BC-3 Payment's `BookingCheckoutSaga` can load/save the Booking
+  // aggregate (confirm on payment success, expire on failure/expiry) without a
+  // module cycle — Payment imports Booking, never the reverse.
+  exports: [BookingRepositoryPort],
 })
 export class BookingModule {}
