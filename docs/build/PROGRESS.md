@@ -11,14 +11,16 @@
 | S1 Listing search & detail | P1 | ☑ done | `/listings` search + `/listings/:id` detail over seeded Postgres; 15 api tests + 5 Playwright green |
 | S2 Auth | M1 | ☑ done | register/login → httpOnly-cookie JWT session, RBAC guard; **Ken wrote the domain layer**; 77 api tests + 4 Playwright green |
 | S3 Availability + Booking Hold | P2 | ☑ done | reserve → Booking(PendingPayment) + Hold in one txn; overbooking prevented by Postgres `EXCLUDE` (proven under live concurrency); **Ken wrote the Booking domain + state machine**; 172 api tests + 3 Playwright green |
-| S4 Payment Saga | P3 | ☐ | **cut line** |
+| S4 Payment Saga | P3 | ☑ done | Stripe test-mode PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms booking + commits Hold → Transactional Outbox → email; **Ken wrote the Payment domain + the saga**; browser payment (`4242…`) flips the page to Confirmed; 211 api tests green. **cut line** |
 | S5 My bookings + cancel | M5 | ☐ | |
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
-Branch: `s3-booking-hold` (off `main`; not yet committed at time of writing).
-**Next up: S4 — Payment Saga + Outbox + Confirmation** (Payments + Notifications + Booking): Stripe **test-mode** PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms the booking + commits the Hold → Transactional Outbox emits `BookingConfirmed` → Notifications sends the email. **Minimum deployable cut line** — deploy web/api/db after this. Depends on S3 (done).
-Deployed: web `<deferred to S4>` · api `<deferred to S4>` · db local docker-compose Postgres 16.
+Branch: `s4-payment` (off `main`; not yet committed at time of writing).
+**Next up: DEPLOY (the cut line), then S5 — My bookings + cancel.** S4 is the minimum deployable slice
+(search → reserve → pay-test → confirm). Deploy web → Vercel, api → Render/Fly/Railway, db → Neon/Supabase,
+and point Stripe's webhook at the deployed api. Then S5 (guest booking list + cancellation flow). Depends on S4 (done).
+Deployed: web `<pending — deploy now>` · api `<pending — deploy now>` · db local docker-compose Postgres 16.
 CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch for now).
 
 ---
@@ -213,3 +215,74 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   `PendingPayment`); scheduled Hold-expiry job (S4/S5); cancel flow (S5); k6 load test (stretch).
 - **Next:** S4 — Payment Saga + Outbox + Confirmation (Stripe test mode → webhook → saga confirms + commits Hold →
   Outbox → email). The **minimum deployable cut line**.
+
+---
+
+## S4 — Payment Saga + Outbox + Confirmation  *(the cut line)*
+
+- **Shipped:** a guest with a `PendingPayment` booking pays with a Stripe **test-mode** card and the booking
+  becomes **Confirmed** on its own — no refresh. Card details → Stripe PaymentIntent (via the ACL) →
+  `payment_intent.succeeded` webhook → idempotent handler → **`BookingCheckoutSaga`** confirms the booking +
+  commits the Hold in one transaction + writes a `BookingConfirmed` **outbox** row → a polling relay delivers it
+  → Notifications emails the guest → the confirmation page (polling `GET /bookings/:id`) flips to Confirmed.
+  Touches BC-3 Payment + BC-4 Stripe ACL + BC-5 Notifications, orchestrating BC-1 Booking + BC-2 Inventory.
+- **The two headline guarantees:**
+  - **A duplicate webhook is harmless.** Stripe delivers at-least-once; a `ProcessedWebhookEvent` dedup ledger
+    (unique on Stripe `event.id`) skips a re-delivery, **and** the `Payment` aggregate's transitions are
+    idempotent (re-applying the same terminal state is a no-op; a *conflicting* one throws
+    `InvalidPaymentStateException`). Proven live: a resent `payment_intent.succeeded` → **no** second confirm,
+    **no** second email.
+  - **Confirm-and-notify can't tear.** The `BookingConfirmed` event row is written **in the same transaction**
+    as `booking.confirm()` / `hold.commit()` (Transactional Outbox), so it's impossible to confirm-without-notify
+    or notify-without-confirm. A separate `@Interval` relay delivers it at-least-once; the `notification_log`
+    (keyed on event id) makes the consumer idempotent. See **ADR-0008** (Stripe ACL) + **ADR-0009** (Outbox).
+- **Contract added:** `packages/shared/src/contracts/payment.ts` — `createPaymentIntentResponse`
+  (`{ clientSecret, paymentId }`). Money stays integer minor units on the wire (ADR-0005).
+- **Backend (`apps/api`):** `payment/` — Stripe confined to `infra/adapters/stripe-payment.adapter.ts` (only place
+  the SDK + `sk_test`/`whsec` live); `POST /bookings/:id/pay` (creates a Pending `Payment` + a Stripe
+  PaymentIntent, returns the client secret); `POST /webhooks/stripe` (raw-body signature verify → domain intent);
+  `CreatePaymentIntent` handler; hold-expiry `@Interval` job (compensation safety net). `shared/outbox/` — the
+  `outbox_event` table + `@Interval` relay. `notifications/` — `TestMailerAdapter` + `notification_log`. First use
+  of a **process manager / saga** and the **outbox** in this codebase. Migration `20260707103131_s4_payment_outbox`
+  (`payment`, `processed_webhook_event`, `outbox_event`, `notification_log`).
+- **User implemented (fill plan):** **Ken wrote the entire Payment domain + the saga** —
+  `payment/domain/vo/payment-id.vo.ts` + `money.vo.ts` (his BC's own copy, integer cents),
+  `payment/domain/models/payment.model.ts` (the **idempotent state machine** — `markSucceeded`/`markFailed` guard
+  only the *conflicting* terminal state and otherwise assign, so same-state is a free no-op — the crux of S4,
+  praised as the clean shape), `processed-webhook-event.model.ts` (the tiny dedup-ledger aggregate), the
+  `PaymentNotFound` / `InvalidPaymentState` exceptions, a fresh `HoldNotFoundException`, and
+  `application/booking-checkout.saga.ts` — the **process manager**: three methods, each one `this.tx.run(...)`;
+  the confirm path loads Booking + Hold, calls `confirm()` + `commit()`, saves both, and enqueues the outbox row
+  **inside** the txn; `onPaymentFailed` / `onHoldExpired` are the **compensation** (`release()` + `expire()`, no
+  outbox). Drove `payment.model.spec` (8) + `booking-checkout.saga.spec` (3) + the VO specs red→green. Review:
+  **0 must-fix** (independent backend-engineer pass); a first round of 3 self-caught nits (dead code, an
+  inconsistent raw `Error` → he added `HoldNotFoundException` to match the pattern, an error-message tidy), plus
+  learning nits noted-not-required (ingress `Date` copy in `reconstitute`; `currency` rides the outbox payload's
+  open index signature rather than a declared field). Coaching lesson landed: idempotency as "same terminal state
+  is a no-op, a contradictory one is a bug"; the outbox `enqueue` must be *inside* `tx.run` for atomicity.
+- **Frontend (`apps/web`):** Stripe Payment Element checkout (`components/payment-panel.tsx`) with
+  `@stripe/react-stripe-js`; `payment-confirmation.tsx` polls `GET /bookings/:id` every 2s (cap ~30s) and flips
+  to Confirmed; `app/bookings/[id]/confirmed/` page; env `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (`pk_test`). Trusts
+  backend status — never confirms from the client.
+- **Definition of Done:**
+  - [x] contract shared both ends, no dup type
+  - [x] `tsc --noEmit` clean (api + web)
+  - [x] domain framework/ORM-free (Ken's `payment/domain` grep-clean; Stripe SDK only in the ACL adapter);
+        cross-aggregate confirm+commit in ONE transaction (no `$transaction` in application)
+  - [x] **idempotent webhook** — dedup ledger + idempotent aggregate; a resent event does nothing twice (live)
+  - [x] **outbox is atomic** — `BookingConfirmed` row commits with the state change; relay delivers; consumer
+        deduped by `notification_log`
+  - [x] both apps run; **browser payment with `4242 4242 4242 4242` flips the page to Confirmed unaided**;
+        error paths 401/404/409
+- **Verifier result:** PASS (both halves). Headless: 211 api tests / 39 suites green (incl. Testcontainers
+  webhook-idempotency + outbox-relay specs); `POST /bookings/:id/pay` → real Stripe test PaymentIntent
+  (`pi_…_secret_…`); 401/404/409 on the error paths; a locally-signed synthetic webhook drove Confirmed +
+  a notification, a replay drove neither. Browser (Ken): test-card payment → Confirmed; DB shows the Confirmed
+  booking, a Succeeded `payment` (`pi_3TqYweCB…`), 2 `processed_webhook_event` rows, a `notification_log` row.
+- **ADRs:** `adr/0008-stripe-payment-gateway-anti-corruption-layer.md` (Stripe behind an ACL, BC-4),
+  `adr/0009-transactional-outbox-for-booking-confirmed.md` (crash-safe cross-context event delivery).
+- **Deferred (not S4 scope):** real settlement/refunds/payouts (out of scope, PRD §2/§6); outbox retention/prune +
+  dead-letter for a poison event (S7); cancel flow (S5); the noted learning nits (ingress Date copy, `currency`
+  as a declared payload field).
+- **Next:** **DEPLOY** — this is the cut line (search → reserve → pay-test → confirm all work). web → Vercel,
+  api → Render/Fly/Railway, db → Neon/Supabase; point a Stripe webhook endpoint at the deployed api. Then S5.

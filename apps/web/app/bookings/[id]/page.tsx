@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { getBooking, BookingNotFoundError } from '@/lib/api/bookings';
 import { requireUser } from '@/lib/auth/session';
 import { HoldCountdown } from '@/components/hold-countdown';
+import { PaymentPanel } from '@/components/payment-panel';
 import { formatPrice } from '@/lib/format';
 import { longDateLabel, nightsInStay } from '@/lib/dates';
 
@@ -46,6 +47,8 @@ export default async function BookingDetailPage({
   const listingHref = `/listings/${booking.listingId}`;
   const nights = nightsInStay(booking.checkIn, booking.checkOut).length;
   const isPending = booking.status === 'PendingPayment';
+  const isConfirmed =
+    booking.status === 'Confirmed' || booking.status === 'Completed';
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 p-6 sm:p-8">
@@ -108,14 +111,21 @@ export default async function BookingDetailPage({
       </dl>
 
       {isPending ? (
-        <button
-          type="button"
-          disabled
-          className="rounded-md bg-gray-900 px-5 py-2.5 text-sm font-medium text-white opacity-60"
-          title="Payment arrives in the next slice (S4)"
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold">Pay to confirm</h2>
+          <PaymentPanel bookingId={booking.id} listingHref={listingHref} />
+          <p className="text-xs text-gray-400">
+            Test mode — use card 4242 4242 4242 4242 with any future expiry and
+            any CVC. No real charge is made.
+          </p>
+        </section>
+      ) : isConfirmed ? (
+        <Link
+          href={`/bookings/${booking.id}/confirmed`}
+          className="w-fit rounded-md bg-gray-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900 focus-visible:ring-offset-2"
         >
-          Continue to payment
-        </button>
+          View confirmation
+        </Link>
       ) : (
         <Link
           href={listingHref}
@@ -124,11 +134,6 @@ export default async function BookingDetailPage({
           Back to listing
         </Link>
       )}
-
-      <p className="text-xs text-gray-400">
-        Payment is wired up in the next step. For now this confirms the dates are
-        held for you.
-      </p>
     </main>
   );
 }

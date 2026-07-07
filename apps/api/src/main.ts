@@ -6,7 +6,13 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from '@/app.module';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // `rawBody: true` captures the untouched request body Buffer on `req.rawBody`
+  // (in addition to the normal JSON parsing) — the Stripe webhook needs the exact
+  // bytes to verify the signature. Every other route keeps parsed JSON as before.
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: true,
+    rawBody: true,
+  });
   app.useLogger(app.get(Logger));
 
   // Parse cookies so the JWT session (httpOnly access/refresh cookies) is

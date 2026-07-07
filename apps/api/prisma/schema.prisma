@@ -53,6 +53,15 @@ enum BookingStatus {
   NoShow
 }
 
+/// BC-3 Payment lifecycle (S4). `Pending` on intent creation; a verified Stripe
+/// webhook drives it to `Succeeded`/`Failed`. Transitions are idempotent in the
+/// aggregate (re-applying a terminal state is a no-op).
+enum PaymentStatus {
+  Pending
+  Succeeded
+  Failed
+}
+
 /// BC-7 Identity & Access. The `User` aggregate's physical store. `email` is
 /// unique (the registration invariant); `passwordHash` is never returned to the
 /// client (the API projects the SAFE AuthUser shape at the boundary).
@@ -147,4 +156,58 @@ model Booking {
 
   @@index([guestId])
   @@map("booking")
+}
+
+/// BC-3 Payment aggregate (S4) — our purified model of an in-flight payment for a
+/// booking. References the Booking by plain id (no FK across aggregates).
+/// `amount` is in minor units (cents), frozen from the booking's priceSnapshot.
+/// `stripePaymentIntentId` is the opaque reference from the Stripe ACL (BC-4) —
+/// unique so the webhook handler can resolve the Payment from the intent.
+model Payment {
+  id                    String        @id @default(uuid()) @db.Uuid
+  bookingId             String        @db.Uuid
+  amount                Int
+  currency              String        @default("USD")
+  status                PaymentStatus @default(Pending)
+  stripePaymentIntentId String        @unique
+  createdAt             DateTime      @default(now())
+
+  @@index([bookingId])
+  @@map("payment")
+}
+
+/// BC-3 idempotency ledger (S4). One row per handled Stripe `event.id`; the PK
+/// makes duplicate webhook delivery safe — if the row exists, the event was
+/// already processed and the handler skips (returns 200 without re-applying).
+model ProcessedWebhookEvent {
+  eventId     String   @id
+  processedAt DateTime @default(now())
+
+  @@map("processed_webhook_event")
+}
+
+/// Transactional Outbox (S4, cross-cutting infra — not a BC). The event row is
+/// written in the SAME transaction as the aggregate change (e.g. BookingConfirmed
+/// in the confirm txn). A polling relay publishes rows where `publishedAt IS NULL`
+/// and stamps `publishedAt`. At-least-once delivery → consumers must be idempotent.
+model OutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  aggregateId String    @db.Uuid
+  type        String
+  payload     Json
+  occurredAt  DateTime  @default(now())
+  publishedAt DateTime?
+
+  @@index([publishedAt])
+  @@map("outbox_event")
+}
+
+/// BC-8 Notifications delivery ledger (S4). Dedups outbox delivery on the outbox
+/// event id so a duplicate (at-least-once) delivery never double-sends an email.
+model NotificationLog {
+  eventId String   @id @db.Uuid
+  type    String
+  sentAt  DateTime @default(now())
+
+  @@map("notification_log")
 }
