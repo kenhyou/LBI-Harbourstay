@@ -1,0 +1,35 @@
+# AWS Amplify Hosting build spec for the Next.js frontend (apps/web).
+#
+# Amplify's autodetection assumes a single-package repo and npm. This repo is a
+# pnpm workspace, and `@harbourstay/web` imports `@harbourstay/shared`, which
+# resolves to ./dist — so the shared contract package MUST be compiled before
+# `next build`. Hence the explicit spec.
+#
+# `appRoot: apps/web` makes Amplify cd into apps/web; commands below step back up
+# to the workspace root so pnpm can see the whole graph.
+
+version: 1
+applications:
+  - appRoot: apps/web
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - corepack enable
+            - corepack prepare pnpm@9.15.0 --activate
+            # `--filter @harbourstay/web...` installs the web app plus its
+            # workspace dependencies, and skips the api's (heavy) tree.
+            - cd ../.. && pnpm install --frozen-lockfile --filter @harbourstay/web...
+        build:
+          commands:
+            - cd ../.. && pnpm --filter @harbourstay/shared build
+            - cd ../.. && pnpm --filter @harbourstay/web build
+      artifacts:
+        # Next.js SSR/RSC: Amplify picks up .next and deploys it as WEB_COMPUTE.
+        baseDirectory: .next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - .next/cache/**/*
+          - ../../node_modules/**/*

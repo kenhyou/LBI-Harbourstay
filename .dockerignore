@@ -1,0 +1,38 @@
+# Keep the build context small and — critically — keep secrets out of the image.
+# Anything matched here is never sent to the Docker daemon.
+
+# Secrets. NEVER ship these; App Runner injects env vars from Secrets Manager.
+.env
+.env.*
+!.env.example
+
+# Dependencies + build output (the image builds its own)
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+.turbo
+**/.turbo
+
+# Test + tooling artefacts
+coverage
+**/coverage
+test-results
+playwright-report
+**/*.spec.ts
+**/*.integration.spec.ts
+
+# VCS / editor / docs — irrelevant to a runtime image
+.git
+.github
+.vscode
+.idea
+docs
+adr
+*.md
+!README.md
+
+# Local infra
+docker-compose.yml
