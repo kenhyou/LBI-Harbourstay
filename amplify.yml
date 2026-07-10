@@ -37,6 +37,15 @@ applications:
             - (cd ../.. && pnpm install --frozen-lockfile --filter @harbourstay/web...)
         build:
           commands:
+            # Amplify injects console env vars into the BUILD container only — a Next.js
+            # server component sees nothing at runtime (AWS does this deliberately, so
+            # build-time secrets can't leak into the compute bundle). Without this, the
+            # RSC fetch falls back to `http://localhost:3001` and every page that touches
+            # the API dies with ECONNREFUSED 127.0.0.1:3001.
+            # Fix per AWS docs: write them into <appRoot>/.env.production BEFORE building.
+            # `|| true` because grep exits 1 when nothing matches, which would fail the build.
+            - env | grep -e '^API_URL=' >> .env.production || true
+            - env | grep -e '^NEXT_PUBLIC_' >> .env.production || true
             - (cd ../.. && pnpm --filter @harbourstay/shared build)
             - (cd ../.. && pnpm --filter @harbourstay/web build)
             # Hoisting lands packages at the workspace root; Amplify only ships appRoot.
