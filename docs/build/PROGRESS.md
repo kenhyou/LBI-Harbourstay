@@ -12,15 +12,16 @@
 | S2 Auth | M1 | ☑ done | register/login → httpOnly-cookie JWT session, RBAC guard; **Ken wrote the domain layer**; 77 api tests + 4 Playwright green |
 | S3 Availability + Booking Hold | P2 | ☑ done | reserve → Booking(PendingPayment) + Hold in one txn; overbooking prevented by Postgres `EXCLUDE` (proven under live concurrency); **Ken wrote the Booking domain + state machine**; 172 api tests + 3 Playwright green |
 | S4 Payment Saga | P3 | ☑ done | Stripe test-mode PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms booking + commits Hold → Transactional Outbox → email; **Ken wrote the Payment domain + the saga**; browser payment (`4242…`) flips the page to Confirmed; 211 api tests green. **cut line** |
+| **Deploy (cut line)** | §12 | ☑ done | **live on AWS** — `app.hoegun.xyz` (Amplify SSR) → `api.hoegun.xyz` (ALB → ECS Fargate) → RDS Postgres 16. Real Stripe test-card payment: webhook `200` → outbox relay delivered `BookingConfirmed` **1s later**, exactly once. |
 | S5 My bookings + cancel | M5 | ☐ | |
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
-Branch: `s4-payment` (off `main`; not yet committed at time of writing).
-**Next up: DEPLOY (the cut line), then S5 — My bookings + cancel.** S4 is the minimum deployable slice
-(search → reserve → pay-test → confirm). Deploy web → Vercel, api → Render/Fly/Railway, db → Neon/Supabase,
-and point Stripe's webhook at the deployed api. Then S5 (guest booking list + cancellation flow). Depends on S4 (done).
-Deployed: web `<pending — deploy now>` · api `<pending — deploy now>` · db local docker-compose Postgres 16.
+Branch: `main` (deploy work merged; `deploy-aws` merged in).
+**Next up: S5 — My bookings + cancel** (guest booking list + cancellation flow). Depends on S4 (done).
+Deployed: web **https://app.hoegun.xyz** (AWS Amplify Hosting, SSR/WEB_COMPUTE) · api **https://api.hoegun.xyz**
+(ALB + ACM → ECS Fargate, 1 task, `us-west-2`) · db **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
+Runbook: [docs/DEPLOY.md](../DEPLOY.md) · topology rationale: `adr/0010-aws-deploy-ecs-fargate-behind-alb.md`.
 CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch for now).
 
 ---
@@ -286,3 +287,49 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   as a declared payload field).
 - **Next:** **DEPLOY** — this is the cut line (search → reserve → pay-test → confirm all work). web → Vercel,
   api → Render/Fly/Railway, db → Neon/Supabase; point a Stripe webhook endpoint at the deployed api. Then S5.
+
+---
+
+## Deploy — the S4 cut line, live on AWS  *(user-driven, console)*
+
+- **Shipped:** the whole cut line running on AWS in `us-west-2`, on Ken's own domain, over TLS.
+  `https://app.hoegun.xyz` (Amplify SSR) → `https://api.hoegun.xyz` (ALB + ACM) → ECS Fargate task →
+  RDS PostgreSQL 16.14 (private). Stripe webhooks hit the public API. Ken clicked every console step
+  himself; the agent scaffolded, verified each step against the AWS APIs, and debugged.
+- **The headline proof:** a real Stripe **test-card** payment on the deployed site produced —
+  `12:39:29 webhook POST → 200` … `12:39:30 notification sent`. **Exactly one** notification, **1 second**
+  after the webhook. That single second proves the S4 Transactional-Outbox relay's `@Interval(5s)` timer
+  really ticks in production — the load-bearing claim of **ADR-0010**. Two forged unsigned POSTs to
+  `/webhooks/stripe` were rejected `400`, so signature verification holds: nobody can confirm a booking
+  they never paid for.
+- **Topology (ADR-0010):** ECS **Fargate** behind an **ALB**, *not* Lambda and *not* App Runner — both are
+  disqualified by S4's background timers (Lambda has none; App Runner **throttles CPU when idle**). The task
+  runs in a **public subnet with a public IP** so it reaches `api.stripe.com` through the existing IGW,
+  avoiding a **$32/mo NAT Gateway**; it is still unreachable from the internet because the security groups
+  chain `alb-sg → api-sg → rds-sg`. Secrets in **SSM Parameter Store** SecureString (free) rather than
+  Secrets Manager. `prisma migrate deploy` runs in the container on start (idempotent, advisory-locked),
+  so **RDS never needs public access**.
+- **Artifacts added:** `apps/api/Dockerfile` (multi-stage, pnpm-workspace aware; verified by *building and
+  booting* both `arm64` and `linux/amd64`), `.dockerignore` (keeps `.env` out of every layer), `amplify.yml`,
+  `docs/DEPLOY.md` (console runbook with real account ids + a ranked gotcha list), `adr/0010-…md`.
+  `prisma` CLI moved to `dependencies` so the prod install can regenerate the client and the container can
+  self-migrate.
+- **Four bugs found and fixed (all would have shipped silently):**
+  1. `pnpm prune --prod` in the Dockerfile deleted `node_modules` and "reinstalled" into an empty tree with no
+     store cache mount. **`docker build` went green; the image crash-looped.** Replaced with a `prod-deps` stage.
+     *Lesson: a successful build proves nothing; boot the container.*
+  2. Amplify's `WEB_COMPUTE` bundler packages `<appRoot>/node_modules` and cannot follow pnpm's symlinks out to
+     `../../node_modules/.pnpm` → `CustomerError: missing the 'next' dependency`. Fixed with `node-linker=hoisted`
+     **appended during the build only** (repo-wide it empties `apps/api/node_modules` and breaks the Dockerfile),
+     plus copying the hoisted root `node_modules` under the app root.
+  3. Amplify injects console env vars into the **build** container, never the **SSR runtime** — so
+     `process.env.API_URL` was `undefined` and every RSC fetch fell back to `localhost:3001`
+     (`ECONNREFUSED 127.0.0.1:3001`). Fixed by writing `API_URL` into `apps/web/.env.production` during the build.
+  4. 🚨 **A Stripe `sk_test_` secret key was pasted into `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`** and inlined into
+     the client bundle. Key rolled in Stripe, SSM updated, ECS redeployed, 17 served chunks re-scanned clean.
+     *Lesson: `NEXT_PUBLIC_` is not a naming convention, it is a publishing instruction.*
+- **Cost:** ~$30/month year one (ALB ~$18 + Fargate 0.25 vCPU/1 GB ~$11; RDS free tier), ~$45 after. Budget
+  alarm set. Teardown steps in `docs/DEPLOY.md` §13.
+- **Deferred:** infrastructure is click-ops — codify it (CDK/Terraform) in S7, along with autoscaling >1 task,
+  RDS Multi-AZ, outbox retention/dead-letter, and a real mailer (SES) behind the existing `MailerPort`.
+- **Next:** S5 — My bookings + cancel.

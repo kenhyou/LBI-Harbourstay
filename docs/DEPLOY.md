@@ -451,3 +451,20 @@ leave them, and re-deploying is quick.
    `api.hoegun.xyz.hoegun.xyz`.
 8. **Webhook 400 "signature verification failed"** → still holding the `stripe listen`
    secret; use the dashboard endpoint's `whsec_…` and force a new deployment.
+9. **Amplify: `CustomerError: The 'node_modules' folder is missing the 'next' dependency`**
+   → the build *succeeded*; the **deploy** failed. Amplify packages `<appRoot>/node_modules`
+   and cannot follow pnpm's symlinks out to `../../node_modules/.pnpm`. `amplify.yml` appends
+   `node-linker=hoisted` to `.npmrc` **during the build** and copies the hoisted root
+   `node_modules` under `apps/web`. Do **not** commit that `.npmrc` line — repo-wide it empties
+   `apps/api/node_modules` and breaks `apps/api/Dockerfile`.
+10. **Deployed pages show the error boundary; CloudWatch says `ECONNREFUSED 127.0.0.1:3001`**
+    → Amplify injects console env vars into the **build** container only. A Next.js server
+    component sees nothing at runtime (deliberate, so build secrets can't leak), so
+    `process.env.API_URL` is `undefined` and the code falls back to its localhost default.
+    `amplify.yml` writes `API_URL` into `apps/web/.env.production` before `next build`.
+    Amplify's own SSR logs are in CloudWatch log group `/aws/amplify/<appId>`.
+11. 🚨 **Never put an `sk_` key in a `NEXT_PUBLIC_` variable.** `NEXT_PUBLIC_` is a *publishing
+    instruction*: Next.js inlines the value into JavaScript served to every browser. `pk_test_`
+    (publishable) and `sk_test_` (secret) differ by two characters and sit next to each other in
+    the Stripe dashboard. If it happens: **roll the key in Stripe first**, then update SSM, force
+    a new ECS deployment, fix the Amplify variable, and rebuild (the value is baked in at build).
