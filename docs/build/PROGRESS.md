@@ -12,14 +12,14 @@
 | S2 Auth | M1 | ☑ done | register/login → httpOnly-cookie JWT session, RBAC guard; **Ken wrote the domain layer**; 77 api tests + 4 Playwright green |
 | S3 Availability + Booking Hold | P2 | ☑ done | reserve → Booking(PendingPayment) + Hold in one txn; overbooking prevented by Postgres `EXCLUDE` (proven under live concurrency); **Ken wrote the Booking domain + state machine**; 172 api tests + 3 Playwright green |
 | S4 Payment Saga | P3 | ☑ done | Stripe test-mode PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms booking + commits Hold → Transactional Outbox → email; **Ken wrote the Payment domain + the saga**; browser payment (`4242…`) flips the page to Confirmed; 211 api tests green. **cut line** |
-| **Deploy (cut line)** | §12 | ☑ done | **live on AWS** — `app.hoegun.xyz` (Amplify SSR) → `api.hoegun.xyz` (ALB → ECS Fargate) → RDS Postgres 16. Real Stripe test-card payment: webhook `200` → outbox relay delivered `BookingConfirmed` **1s later**, exactly once. |
+| **Deploy (cut line)** | §12 | ☑ done | **live on AWS** — `app.harbourstay.xyz` (Amplify SSR) → `api.harbourstay.xyz` (ALB → ECS Fargate) → RDS Postgres 16. Real Stripe test-card payment: webhook `200` → outbox relay delivered `BookingConfirmed` **1s later**, exactly once. |
 | S5 My bookings + cancel | M5 | ☐ | |
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
 Branch: `main` (deploy work merged; `deploy-aws` merged in).
 **Next up: S5 — My bookings + cancel** (guest booking list + cancellation flow). Depends on S4 (done).
-Deployed: web **https://app.hoegun.xyz** (AWS Amplify Hosting, SSR/WEB_COMPUTE) · api **https://api.hoegun.xyz**
+Deployed: web **https://app.harbourstay.xyz** (AWS Amplify Hosting, SSR/WEB_COMPUTE) · api **https://api.harbourstay.xyz**
 (ALB + ACM → ECS Fargate, 1 task, `us-west-2`) · db **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
 Runbook: [docs/DEPLOY.md](../DEPLOY.md) · topology rationale: `adr/0010-aws-deploy-ecs-fargate-behind-alb.md`.
 CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch for now).
@@ -293,7 +293,7 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
 ## Deploy — the S4 cut line, live on AWS  *(user-driven, console)*
 
 - **Shipped:** the whole cut line running on AWS in `us-west-2`, on Ken's own domain, over TLS.
-  `https://app.hoegun.xyz` (Amplify SSR) → `https://api.hoegun.xyz` (ALB + ACM) → ECS Fargate task →
+  `https://app.harbourstay.xyz` (Amplify SSR) → `https://api.harbourstay.xyz` (ALB + ACM) → ECS Fargate task →
   RDS PostgreSQL 16.14 (private). Stripe webhooks hit the public API. Ken clicked every console step
   himself; the agent scaffolded, verified each step against the AWS APIs, and debugged.
 - **The headline proof:** a real Stripe **test-card** payment on the deployed site produced —

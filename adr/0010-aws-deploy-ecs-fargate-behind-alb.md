@@ -30,11 +30,11 @@ different hostnames — no `SameSite=None`, no CORS credentials dance, no code c
 
 ## Decision
 
-**Frontend** → **AWS Amplify Hosting** (`app.hoegun.xyz`), managed Next.js SSR/RSC,
+**Frontend** → **AWS Amplify Hosting** (`app.harbourstay.xyz`), managed Next.js SSR/RSC,
 git-push deploys, Amplify-managed certificate.
 
 **API** → **ECS on Fargate**, one task, behind an **Application Load Balancer**
-(`api.hoegun.xyz`) terminating TLS with an **ACM** certificate in the ALB's own region.
+(`api.harbourstay.xyz`) terminating TLS with an **ACM** certificate in the ALB's own region.
 
 **Database** → **RDS for PostgreSQL 16**, `db.t4g.micro`, single-AZ, **not publicly
 accessible**, reachable only from the task's security group.

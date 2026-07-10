@@ -8,31 +8,79 @@ Console-driven, with CLI where the console cannot help (building images).
 
 ---
 
-## 0. The facts for this account
+## 0. Fill these in for your account
 
-| Thing | Value |
-|---|---|
-| AWS account | `935140614126` |
-| IAM user | `ken` (MFA on) · CLI profile `harbourstay` |
-| Region | `us-west-2` (Oregon) — **everything** lives here |
-| VPC | `vpc-0f18bafafd74fe34a` (default, `172.31.0.0/16`) |
-| Internet Gateway | `igw-0cc4c3ad58c579249` |
-| Public subnets | `subnet-04cf913a59dfab67a` (2a) · `subnet-0803dcc06b1ae2ca0` (2b) · `subnet-0de8444e83c8cf116` (2c) · `subnet-02053d6ca115cfca1` (2d) |
-| ACM certificate | `arn:aws:acm:us-west-2:935140614126:certificate/30f1bd9b-ffa9-4955-9b0e-4aab3206071b` (`api.hoegun.xyz`, ISSUED) |
-| API hostname | `api.hoegun.xyz` → ALB |
-| Web hostname | `app.hoegun.xyz` → Amplify |
-| DNS | GoDaddy (nameservers `ns37/ns38.domaincontrol.com`) |
+This runbook uses placeholders. **No real account identifiers are committed here** —
+substitute your own as you go. Keep the filled-in values somewhere private (a password
+manager or an untracked scratch file), never in the repo.
 
-> ⚠️ The apex `hoegun.xyz` already resolves to `35.185.44.232` (something of
-> yours on Google Cloud). **We add only `api.` and `app.` records.** Do not
-> repoint the apex or the nameservers.
+| Placeholder | What it is | How to get it |
+|---|---|---|
+| `<ACCOUNT_ID>` | your 12-digit AWS account id | `aws sts get-caller-identity --query Account --output text` |
+| `<REGION>` | the one region everything lives in | pick one (e.g. an `*-west-*` region) and be consistent — ACM certs for an ALB must live in the ALB's region |
+| `<VPC_ID>` | the default VPC | `aws ec2 describe-vpcs --filters Name=isDefault,Values=true` |
+| `<SUBNET_A>` `<SUBNET_B>` | two **public** subnets in different AZs | `aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID>` — need `MapPublicIpOnLaunch: true` |
+| `<IGW_ID>` | the VPC's internet gateway (egress to Stripe) | `aws ec2 describe-internet-gateways` |
+| `<CERT_ARN>` | ACM cert for `api.harbourstay.xyz` | request it in step 0b; must live in `<REGION>` |
+| `<ALB_DNS>` | the load balancer's DNS name | printed once the ALB is `active` |
+| `<RDS_ENDPOINT>` | the database hostname | printed once RDS is `available` |
+| `harbourstay.xyz` | stand-in for **your** registered domain throughout this doc | substitute yours |
+
+Hostnames this runbook creates:
+
+| Host | Points at | Purpose |
+|---|---|---|
+| `api.harbourstay.xyz` | ALB | the API + the Stripe webhook endpoint |
+| `app.harbourstay.xyz` | Amplify | the Next.js frontend |
+
+> ⚠️ **Subdomains only — never the apex.** A `CNAME` is illegal at the apex by DNS
+> spec, and an ALB has no fixed IP, so an `A` record is impossible too. Only Route 53's
+> proprietary `ALIAS` works there. If your apex already serves something, leave it alone.
+
+> ⚠️ **Most registrar DNS panels append your domain to the `Name` field.** Enter `api`,
+> not `api.harbourstay.xyz` — otherwise you create `api.harbourstay.xyz.harbourstay.xyz` and spend an hour
+> wondering why nothing resolves. No trailing dots either.
 
 Every CLI command below assumes:
 
 ```bash
-export AWS_PROFILE=harbourstay
-export AWS_REGION=us-west-2
+export AWS_PROFILE=<YOUR_PROFILE>
+export AWS_REGION=<REGION>
 ```
+
+---
+
+## 0b. Request the HTTPS certificate (do this early — validation takes minutes)
+
+Stripe webhooks require HTTPS, and ACM will not issue a certificate for an
+`*.amazonaws.com` name — which is why an owned domain is mandatory here.
+
+```bash
+aws acm request-certificate \
+  --domain-name api.harbourstay.xyz \
+  --validation-method DNS \
+  --query CertificateArn --output text
+```
+
+Then read the CNAME that ACM wants and create it at your registrar:
+
+```bash
+aws acm describe-certificate --certificate-arn <CERT_ARN> \
+  --query 'Certificate.DomainValidationOptions[0].ResourceRecord'
+```
+
+- Enter only the part **before** your domain in the *Name* field (the registrar appends
+  the rest). Strip trailing dots from both fields.
+- Status flips `PENDING_VALIDATION → ISSUED` in ~5–30 minutes.
+- **Never delete that CNAME.** ACM re-reads it to auto-renew; remove it and the
+  certificate silently fails to renew a year later.
+
+> The certificate must be requested in **`<REGION>`** — the ALB's own region. The
+> widely-repeated "certs must be in `us-east-1`" rule applies **only to CloudFront**.
+> Get this wrong and the cert simply never appears in the ALB listener's dropdown.
+
+You do **not** request a certificate for `app.harbourstay.xyz`: Amplify provisions and
+renews its own (step 10).
 
 ---
 
@@ -40,12 +88,12 @@ export AWS_REGION=us-west-2
 
 ```
                     ┌──────────────┐
-  browser ─https──▶ │   Amplify    │  app.hoegun.xyz   (Next.js SSR/RSC)
+  browser ─https──▶ │   Amplify    │  app.harbourstay.xyz   (Next.js SSR/RSC)
                     └──────┬───────┘
                            │ server-side fetch (API_URL)
                            ▼
                     ┌──────────────┐
-  Stripe ─webhook─▶ │     ALB      │  api.hoegun.xyz   (TLS terminates here, ACM)
+  Stripe ─webhook─▶ │     ALB      │  api.harbourstay.xyz   (TLS terminates here, ACM)
                     └──────┬───────┘
                            │ http :8080
                            ▼
@@ -93,9 +141,9 @@ aws ecr create-repository --repository-name harbourstay-api \
 cross-build, or the task fails to start with an error that never mentions architecture.
 
 ```bash
-cd /Users/ken/Projects/Ken/LBI-Harbourstay
-ACCOUNT=935140614126
-ECR=$ACCOUNT.dkr.ecr.us-west-2.amazonaws.com
+cd <repo-root>
+ACCOUNT=<ACCOUNT_ID>
+ECR=$ACCOUNT.dkr.ecr.<REGION>.amazonaws.com
 TAG=$(git rev-parse --short HEAD)
 
 aws ecr get-login-password | docker login --username AWS --password-stdin $ECR
@@ -147,7 +195,7 @@ only accepts traffic from the tier in front of it.
 | `harbourstay-api-sg` | TCP 8080 | **`harbourstay-alb-sg`** (not an IP range) |
 | `harbourstay-rds-sg` | TCP 5432 | **`harbourstay-api-sg`** |
 
-All in `vpc-0f18bafafd74fe34a`. Leave outbound as the default "all traffic" —
+All in `<VPC_ID>`. Leave outbound as the default "all traffic" —
 the API needs egress to Stripe.
 
 > Sourcing a rule from *another security group* rather than a CIDR is the point.
@@ -172,7 +220,7 @@ Console → **RDS → Create database**.
 | Master password | generate a strong one — **save it** |
 | Instance class | `db.t4g.micro` |
 | Storage | 20 GiB gp3 · **disable** storage autoscaling |
-| VPC | `vpc-0f18bafafd74fe34a` |
+| VPC | `<VPC_ID>` |
 | **Public access** | **No** |
 | Security group | `harbourstay-rds-sg` (remove `default`) |
 | Initial database name | `harbourstay` (under *Additional configuration* — **easy to miss**) |
@@ -181,7 +229,7 @@ Console → **RDS → Create database**.
 Takes ~10 minutes. When the endpoint appears, write the real connection string:
 
 ```bash
-ENDPOINT=harbourstay-db.xxxxxxxx.us-west-2.rds.amazonaws.com
+ENDPOINT=<RDS_ENDPOINT>
 aws ssm put-parameter --name /harbourstay/DATABASE_URL --type SecureString --overwrite \
   --value "postgresql://harbourstay:<PASSWORD>@$ENDPOINT:5432/harbourstay?schema=public&sslmode=require"
 ```
@@ -207,7 +255,7 @@ some Postgres-compatible substitute.
 | Target type | **IP addresses** (required for Fargate `awsvpc`) |
 | Name | `harbourstay-api-tg` |
 | Protocol / port | HTTP · **8080** |
-| VPC | `vpc-0f18bafafd74fe34a` |
+| VPC | `<VPC_ID>` |
 | Health check path | **`/health`** |
 | Healthy threshold | 2 · Interval 15s |
 
@@ -223,7 +271,7 @@ Do **not** register any targets by hand — ECS registers the task for you.
 | Listener **HTTPS :443** | forward → `harbourstay-api-tg`, certificate = the ACM cert above |
 | Listener **HTTP :80** | **Redirect** to HTTPS :443 (301) |
 
-- [ ] ALB state `active`; note its DNS name (`harbourstay-alb-….us-west-2.elb.amazonaws.com`).
+- [ ] ALB state `active`; note its DNS name (`<ALB_DNS>`).
 
 ---
 
@@ -245,8 +293,8 @@ Console → IAM → Roles → Create role → **AWS service → Elastic Containe
     "Effect": "Allow",
     "Action": ["ssm:GetParameters", "kms:Decrypt"],
     "Resource": [
-      "arn:aws:ssm:us-west-2:935140614126:parameter/harbourstay/*",
-      "arn:aws:kms:us-west-2:935140614126:alias/aws/ssm"
+      "arn:aws:ssm:<REGION>:<ACCOUNT_ID>:parameter/harbourstay/*",
+      "arn:aws:kms:<REGION>:<ACCOUNT_ID>:alias/aws/ssm"
     ]
   }]
 }
@@ -266,7 +314,7 @@ Console → IAM → Roles → Create role → **AWS service → Elastic Containe
 | CPU / Memory | **0.25 vCPU / 1 GB** |
 | Task execution role | `ecsTaskExecutionRole` |
 | Container name | `api` |
-| Image URI | `935140614126.dkr.ecr.us-west-2.amazonaws.com/harbourstay-api:latest` |
+| Image URI | `<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/harbourstay-api:latest` |
 | Port mapping | **8080** TCP |
 | Log driver | `awslogs` (Console offers to create the log group) |
 
@@ -274,7 +322,7 @@ Console → IAM → Roles → Create role → **AWS service → Elastic Containe
 
 | Key | Value |
 |---|---|
-| `WEB_ORIGIN` | `https://app.hoegun.xyz` |
+| `WEB_ORIGIN` | `https://app.harbourstay.xyz` |
 
 `PORT=8080` and `NODE_ENV=production` are already baked into the image.
 
@@ -282,7 +330,7 @@ Console → IAM → Roles → Create role → **AWS service → Elastic Containe
 
 `DATABASE_URL` · `JWT_ACCESS_SECRET` · `JWT_REFRESH_SECRET` · `STRIPE_SECRET_KEY` · `STRIPE_WEBHOOK_SECRET`
 
-ARN form: `arn:aws:ssm:us-west-2:935140614126:parameter/harbourstay/DATABASE_URL`
+ARN form: `arn:aws:ssm:<REGION>:<ACCOUNT_ID>:parameter/harbourstay/DATABASE_URL`
 
 **Service** — from the cluster → Create service:
 
@@ -300,25 +348,25 @@ The container's `CMD` runs `prisma migrate deploy` on every start. It's idempote
 takes a Postgres advisory lock, so it's safe on restart and with >1 task.
 
 - [ ] Service reaches 1/1 running; target group shows the task **healthy**.
-- [ ] `curl https://harbourstay-alb-….us-west-2.elb.amazonaws.com/health` → wait, that
-      will fail TLS (cert is for `api.hoegun.xyz`). Check via the target group health
+- [ ] `curl https://<ALB_DNS>/health` → wait, that
+      will fail TLS (cert is for `api.harbourstay.xyz`). Check via the target group health
       instead, then finish DNS below.
 
 ---
 
-## 8. DNS: point `api.hoegun.xyz` at the ALB
+## 8. DNS: point `api.harbourstay.xyz` at the ALB
 
-In **GoDaddy → DNS → Records → Add**:
+In **your DNS provider → DNS → Records → Add**:
 
 | Type | Name | Value |
 |---|---|---|
-| CNAME | `api` | `harbourstay-alb-….us-west-2.elb.amazonaws.com` |
+| CNAME | `api` | `<ALB_DNS>` |
 
-> Name is `api`, **not** `api.hoegun.xyz` — GoDaddy appends the domain. Same trap as
+> Name is `api`, **not** `api.harbourstay.xyz` — the registrar appends the domain. Same trap as
 > the ACM validation record. No trailing dot.
 
-- [ ] `dig +short api.hoegun.xyz` resolves.
-- [ ] `curl https://api.hoegun.xyz/health` → `{"status":"ok",…}` with a valid certificate.
+- [ ] `dig +short api.harbourstay.xyz` resolves.
+- [ ] `curl https://api.harbourstay.xyz/health` → `{"status":"ok",…}` with a valid certificate.
 
 ---
 
@@ -336,13 +384,13 @@ RDS is private. The pragmatic path:
    ```
 4. **Revert both**: Publicly accessible → **No**, and delete the `/32` inbound rule.
 
-- [ ] `GET https://api.hoegun.xyz/listings` returns the seeded listings.
+- [ ] `GET https://api.harbourstay.xyz/listings` returns the seeded listings.
 
 ---
 
 ## 10. Frontend on Amplify
 
-Console → **Amplify → Create new app → GitHub** → repo `kenhyou/LBI-Harbourstay`,
+Console → **Amplify → Create new app → GitHub** → repo `<GITHUB_OWNER>/<REPO>`,
 branch `main`.
 
 - **Monorepo**: tick "My app is a monorepo", app root = `apps/web`.
@@ -353,18 +401,18 @@ branch `main`.
 
 | Key | Value |
 |---|---|
-| `API_URL` | `https://api.hoegun.xyz` |
+| `API_URL` | `https://api.harbourstay.xyz` |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | `pk_test_…` |
 
 > `API_URL` has **no** `NEXT_PUBLIC_` prefix on purpose — it must stay server-only.
 > Prefixing it would ship your API's address into the browser bundle and bypass the
 > route-handler cookie bridge.
 
-**Custom domain**: Amplify → Domain management → Add `hoegun.xyz` → subdomain `app`.
+**Custom domain**: Amplify → Domain management → Add `harbourstay.xyz` → subdomain `app`.
 Amplify issues **its own** ACM certificate automatically and prints CNAME records —
-paste those into GoDaddy (same "name only" rule).
+paste those into your DNS provider (same "name only" rule).
 
-- [ ] `https://app.hoegun.xyz` loads the listings page.
+- [ ] `https://app.harbourstay.xyz` loads the listings page.
 
 ---
 
@@ -372,7 +420,7 @@ paste those into GoDaddy (same "name only" rule).
 
 Stripe Dashboard → **Developers → Webhooks → Add endpoint**:
 
-- Endpoint URL: `https://api.hoegun.xyz/webhooks/stripe`
+- Endpoint URL: `https://api.harbourstay.xyz/webhooks/stripe`
 - Events: `payment_intent.succeeded`, `payment_intent.payment_failed`
 
 Reveal the **Signing secret** (`whsec_…`), then:
@@ -392,7 +440,7 @@ aws ecs update-service --cluster harbourstay --service harbourstay-api --force-n
 
 ## 12. Smoke test the live cut line
 
-1. `https://app.hoegun.xyz` → register → search listings.
+1. `https://app.harbourstay.xyz` → register → search listings.
 2. Open a listing → pick dates → **Reserve** (creates Booking `PendingPayment` + Hold).
 3. Pay with test card **`4242 4242 4242 4242`**, any future expiry / CVC / ZIP.
 4. Watch the confirmation page flip to **Confirmed** on its own.
@@ -428,7 +476,7 @@ aws rds delete-db-instance --db-instance-identifier harbourstay-db \
   --skip-final-snapshot --delete-automated-backups
 ```
 
-The ACM cert, ECR images, SSM parameters, and the GoDaddy records cost nothing —
+The ACM cert, ECR images, SSM parameters, and the DNS records cost nothing —
 leave them, and re-deploying is quick.
 
 ---
@@ -446,9 +494,9 @@ leave them, and re-deploying is quick.
 5. **Stripe calls hang / time out** → the task has **no public IP**. Public subnet is
    not enough; `assignPublicIp` must be `ENABLED`.
 6. **ACM cert not in the ALB listener dropdown** → it's in the wrong region. ALB certs
-   live in the ALB's region (`us-west-2`). The `us-east-1` rule is CloudFront-only.
-7. **GoDaddy record silently wrong** → you pasted the FQDN into *Name* and created
-   `api.hoegun.xyz.hoegun.xyz`.
+   live in the ALB's region (`<REGION>`). The `us-east-1` rule is CloudFront-only.
+7. **A DNS record silently wrong** → you pasted the FQDN into *Name* and created
+   `api.harbourstay.xyz.harbourstay.xyz`.
 8. **Webhook 400 "signature verification failed"** → still holding the `stripe listen`
    secret; use the dashboard endpoint's `whsec_…` and force a new deployment.
 9. **Amplify: `CustomerError: The 'node_modules' folder is missing the 'next' dependency`**
