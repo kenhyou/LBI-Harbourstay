@@ -1,12 +1,24 @@
 # AWS Amplify Hosting build spec for the Next.js frontend (apps/web).
 #
-# Amplify's autodetection assumes a single-package repo and npm. This repo is a
-# pnpm workspace, and `@harbourstay/web` imports `@harbourstay/shared`, which
-# resolves to ./dist — so the shared contract package MUST be compiled before
-# `next build`. Hence the explicit spec.
+# Two things this file exists to solve:
 #
-# `appRoot: apps/web` makes Amplify cd into apps/web; commands below step back up
-# to the workspace root so pnpm can see the whole graph.
+# 1. Amplify's autodetection assumes a single-package npm repo. This is a pnpm
+#    workspace, and `@harbourstay/web` imports `@harbourstay/shared`, which resolves
+#    to ./dist — so the shared contract package must be COMPILED before `next build`.
+#
+# 2. Amplify's WEB_COMPUTE (SSR) runtime packages `<appRoot>/.next` together with
+#    `<appRoot>/node_modules`, and requires `next` from there. pnpm's default linker
+#    fills apps/web/node_modules with SYMLINKS into ../../node_modules/.pnpm — links
+#    that escape the app root, so the uploaded bundle contains no real `next` and the
+#    deploy fails with:
+#       CustomerError: The 'node_modules' folder is missing the 'next' dependency
+#    Fix (per Amplify's monorepo FAQ): install with `node-linker=hoisted` so packages
+#    are real files, then copy the hoisted root node_modules under the app root.
+#
+# `node-linker=hoisted` is APPENDED to .npmrc here rather than committed: repo-wide it
+# leaves apps/api/node_modules empty, which breaks apps/api/Dockerfile.
+#
+# Commands use subshells `( … )` so a `cd` never leaks into the next command.
 
 version: 1
 applications:
@@ -17,19 +29,22 @@ applications:
           commands:
             - corepack enable
             - corepack prepare pnpm@9.15.0 --activate
-            # `--filter @harbourstay/web...` installs the web app plus its
-            # workspace dependencies, and skips the api's (heavy) tree.
-            - cd ../.. && pnpm install --frozen-lockfile --filter @harbourstay/web...
+            # APPEND — the repo's .npmrc already carries auto-install-peers and
+            # strict-peer-dependencies; overwriting it would change resolution.
+            - (cd ../.. && printf '\nnode-linker=hoisted\n' >> .npmrc)
+            # `--filter @harbourstay/web...` = the web app plus its workspace deps;
+            # the api's (heavy) tree is never downloaded.
+            - (cd ../.. && pnpm install --frozen-lockfile --filter @harbourstay/web...)
         build:
           commands:
-            - cd ../.. && pnpm --filter @harbourstay/shared build
-            - cd ../.. && pnpm --filter @harbourstay/web build
+            - (cd ../.. && pnpm --filter @harbourstay/shared build)
+            - (cd ../.. && pnpm --filter @harbourstay/web build)
+            # Hoisting lands packages at the workspace root; Amplify only ships appRoot.
+            - mkdir -p ./node_modules && cp -R ../../node_modules/. ./node_modules/
       artifacts:
-        # Next.js SSR/RSC: Amplify picks up .next and deploys it as WEB_COMPUTE.
         baseDirectory: .next
         files:
           - '**/*'
       cache:
         paths:
           - .next/cache/**/*
-          - ../../node_modules/**/*
