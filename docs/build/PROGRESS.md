@@ -16,10 +16,12 @@
 | S5 My bookings + cancel | M5 | ☑ done | `GET /me/bookings` + detail; policy-aware cancel (`Booking.cancel(outcome, now)` + `hold.release()` + `BookingCancelled` outbox in one txn); refund **computed, not issued**. **Ken wrote the CancellationPolicy VO + `cancel()`**; the command handler + React dialog were Claude-written (opt-out). 238 api tests + Playwright cancel journey green. |
 | S6a Host listings CRUD + RBAC | P4 | ☑ done | `Listing` **write aggregate** (S1 deferred stub, now filled); host CRUD + publish/unpublish behind `@Roles('host')` + per-listing ownership **404 no-leak**; `GET /host/listings[/:id]` CQRS reads (drafts included). **Learn-by-reading mode — Claude wrote all of S6a** (opt-out). 52 api suites / 295 tests + 2 Playwright green. |
 | S6b Availability blocks + host bookings | P4 | ☑ done | host blocks/unblocks date ranges (an **aggregate-owned collection** on `Listing`; overlap → 409) + `GET /host/bookings` (ownership-scoped). A blocked range **prevents a guest hold** (S3 seam, now proven: overlapping booking → 409, **zero rows written**). **Learn-by-reading — Claude-written** (opt-out). 56 api suites / 338 tests + Playwright 3/3 green. |
-| S7 Hardening | P5 | ☐ | |
+| S7a Security baseline (OWASP) | P5 | ☑ done | helmet + credentialed CORS allow-list + `@nestjs/throttler` (tight on `/auth/*`) + web security headers; **JWT secret fail-fast** (prod refuses to boot on a default — the one real vuln the audit found, fixed); `docs/security-audit.md` (24 routes, no authz gap). Verified at runtime: 429 + `Retry-After`, CORS isolation, prod boot exits code 1. **Learn-by-reading — Claude-written.** 57 api suites / 345 tests green. |
+| S7b Observability + delivery metrics | P5 | ☐ | |
+| S7c Docs finalize (README + ADRs) | P5 | ☐ | |
 
 Branch: `main` (S5 merged). S6 is being built on `main` in a different mode — see below.
-**S6 split into S6a + S6b — both done. S6 (host dashboard) is complete.** **Next up: S7 — Hardening** (reconfirm the learning mode there). S6b verified PASS but **uncommitted** at time of writing (to be committed on its own branch + merged, like S6a).
+**S6 (host dashboard) complete.** **S7 (Hardening) is being built learn-by-reading, split into S7a (security ✓) → S7b (observability + delivery metrics) → S7c (docs).** **Next up: S7b.** S7a verified PASS but **uncommitted** at time of writing (commit on its own branch + merge, like S6).
 **⚠️ S6 learning-mode change:** for S6, Ken **opted out of scaffold-and-fill to learn by reading working code** — Claude writes all of S6 (backend aggregate/handlers + frontend, heavily commented as teaching artifacts); no fill files. This is a deliberate, S6-scoped departure from "Ken writes the core"; **reconfirm the mode at S7** rather than assume it carries forward.
 Deployed on a **private custom domain** (hostnames deliberately not recorded here): web = AWS Amplify Hosting
 (SSR/WEB_COMPUTE) · api = ALB + ACM → ECS Fargate, 1 task · db = **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
@@ -547,3 +549,50 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   bookings). **Next:** S7 — Hardening (E2E breadth, OWASP baseline, observability, delivery-metrics
   doc, ADRs finalized). **⚠️ Reconfirm the learning mode at S7** — S6 was learn-by-reading (Claude-
   written); the default is Ken writing the core.
+
+---
+
+## S7a — Security Baseline (OWASP)  *(learn-by-reading mode — Claude-written)*
+
+- **Shipped:** the OWASP Top-10 **baseline** (PRD §9, breadth over depth) across both apps, plus a
+  full authorization audit. No new domain, no new endpoints. **Mode reconfirmed at S7:** Ken chose to
+  continue **learn-by-reading** and to **split S7 into phases** (S7a security → S7b observability +
+  delivery metrics → S7c docs).
+- **API (`apps/api`):** `helmet` secure headers (CSP off on the API — it serves JSON); credentialed
+  **CORS allow-list** (origin-callback from `CORS_ORIGIN`/`WEB_ORIGIN`, `credentials:true`, never
+  `*`); `@nestjs/throttler` rate limiting — global ~100/min/IP + a **tight ~10/min tier on `/auth/*`**
+  (→ 429), `/health` + `/webhooks/stripe` skip-throttled (bursty + signature-authenticated);
+  `x-powered-by` removed; ~100kb JSON body cap. All env-tunable. Wired in a reusable
+  `bootstrap/configure-security.ts` + `shared/throttler/throttler.config.ts`. **Domain untouched.**
+- **Web (`apps/web`):** five security response headers on all routes (`X-Frame-Options: DENY`,
+  `nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS) via `next.config.ts`. **CSP deliberately
+  deferred** — a wrong CSP silently breaks the Stripe Element; a commented scaffold documents exactly
+  what a real CSP must allow + the report-only rollout path.
+- **⭐ The audit + the one real vuln:** `docs/security-audit.md` tabulates **all 24 routes × guard ×
+  role × ownership × validation**. **No route-level authz gap** — the S5/S6 404-no-leak ownership
+  pattern held up end-to-end. It DID surface a genuine vulnerability: the JWT adapter fell back to
+  **well-known literal secrets** (`'dev-access-secret'`…) when its env vars were unset — an
+  auth-forgery risk in prod that every green test had been running on. **Fixed:** `requireSecret`
+  fail-fast — production **throws at construction and refuses to boot** if `JWT_ACCESS_SECRET` /
+  `JWT_REFRESH_SECRET` is unset (dev fallback kept for local/tests). One validation asterisk
+  (`GET /listings/:id` `from`/`to`) closed with a Zod schema.
+- **Contract touched:** added `listingDetailQuery` (optional `from`/`to`) so the detail route's query
+  is validated — the only contract change (no new endpoint).
+- **Definition of Done:**
+  - [x] `tsc --noEmit` clean (api + web); `next build` clean; full suite green (**57 suites / 345 tests**)
+  - [x] rate limiting: `/auth/*` → 429 past the limit (+ `Retry-After`); `/health` unthrottled
+  - [x] CORS: allowed origin reflected + credentials; disallowed origin → no ACAO; never `*`+credentials
+  - [x] helmet headers present + `x-powered-by` absent; >100kb body → 413
+  - [x] web: all five headers on `/listings` + `/login`; Playwright header spec green
+  - [x] JWT fail-fast: prod without secrets **exits code 1**, never serves (unit + isolated boot proof)
+  - [x] authz regression clean (401 anon / 403 guest / 404 no-leak); domain untouched
+- **Verifier result:** **PASS (first pass)** — all 8 DoD items proven by execution (isolated instances
+  used so the auth throttle didn't self-inflict false failures): login 429 + `Retry-After: 56` while
+  `/health` stayed 200 under load; `evil.example` origin got no ACAO; `NODE_ENV=production` + empty
+  secrets → threw in DI, exited 1, never opened a listener; helmet/headers/413 confirmed; Playwright
+  `security-headers` 1/1 + `host-listings`/`auth` 6/6 regression.
+- **ADRs:** `adr/0014-owasp-security-baseline-and-secrets-fail-fast.md`.
+- **Deferred (documented):** enforce CSP (report-only → widen → enforce); Redis-backed throttler for
+  >1 task (in-memory is per-task today); account-level lockout; depth security (pen-test/WAF/MFA — out
+  of scope, PRD §9).
+- **Next:** S7b — Observability (pino/health) + DORA delivery-metrics doc.

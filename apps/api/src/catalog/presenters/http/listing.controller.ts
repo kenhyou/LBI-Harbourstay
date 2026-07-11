@@ -15,8 +15,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import {
+  listingDetailQuery,
   listingSearchQuery,
   type ListingDetail,
+  type ListingDetailQuery,
   type ListingSearchQuery,
   type ListingSummary,
 } from '@harbourstay/shared';
@@ -53,12 +55,14 @@ export class ListingController {
   @ApiNotFoundResponse({ description: 'No Published listing with that id.' })
   async getDetail(
     @Param('id') id: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
+    // Validate the optional `from`/`to` pair against the shared contract (S7a:
+    // every inbound query is Zod-checked). Scoped to `@Query` so the opaque `:id`
+    // path param isn't run through this object schema.
+    @Query(new ZodValidationPipe(listingDetailQuery)) window: ListingDetailQuery,
   ): Promise<ListingDetail> {
     const detail = await this.listings.getDetail(
       id,
-      from && to ? { from, to } : undefined,
+      window.from && window.to ? { from: window.from, to: window.to } : undefined,
     );
     if (!detail) {
       throw new NotFoundException(`Listing ${id} not found`);
