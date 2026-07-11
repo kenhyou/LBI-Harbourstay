@@ -14,17 +14,22 @@ describe('JwtAuthTokenAdapter', () => {
     role: 'host',
   };
 
-  function build() {
-    const config = {
-      get: (key: string) =>
-        ({
-          JWT_ACCESS_SECRET: 'access-secret',
-          JWT_REFRESH_SECRET: 'refresh-secret',
-          JWT_ACCESS_TTL: '15m',
-          JWT_REFRESH_TTL: '7d',
-        })[key],
+  function configOf(values: Record<string, string | undefined>): ConfigService {
+    return {
+      get: (key: string) => values[key],
     } as unknown as ConfigService;
-    return new JwtAuthTokenAdapter(new JwtService(), config);
+  }
+
+  function build() {
+    return new JwtAuthTokenAdapter(
+      new JwtService(),
+      configOf({
+        JWT_ACCESS_SECRET: 'access-secret',
+        JWT_REFRESH_SECRET: 'refresh-secret',
+        JWT_ACCESS_TTL: '15m',
+        JWT_REFRESH_TTL: '7d',
+      }),
+    );
   }
 
   it('issues an access + refresh pair that each verify back to the claims', () => {
@@ -50,5 +55,29 @@ describe('JwtAuthTokenAdapter', () => {
   it('rejects a tampered/garbage token', () => {
     const adapter = build();
     expect(() => adapter.verifyAccessToken('not.a.jwt')).toThrow();
+  });
+
+  // ── S7a: production must NOT boot on a well-known default secret ──────────────
+  it('throws in production when a JWT secret env var is unset (fail-fast, no forgeable default)', () => {
+    const config = configOf({ NODE_ENV: 'production' }); // secrets missing
+    expect(() => new JwtAuthTokenAdapter(new JwtService(), config)).toThrow(
+      /JWT_ACCESS_SECRET must be set in production/,
+    );
+  });
+
+  it('constructs in production when the JWT secrets ARE provided', () => {
+    const config = configOf({
+      NODE_ENV: 'production',
+      JWT_ACCESS_SECRET: 'a-real-access-secret',
+      JWT_REFRESH_SECRET: 'a-real-refresh-secret',
+    });
+    expect(() => new JwtAuthTokenAdapter(new JwtService(), config)).not.toThrow();
+  });
+
+  it('falls back to a dev secret OUTSIDE production (local runs need no env setup)', () => {
+    const config = configOf({}); // no NODE_ENV, no secrets → dev fallback
+    const adapter = new JwtAuthTokenAdapter(new JwtService(), config);
+    const { accessToken } = adapter.issueTokens(claims);
+    expect(adapter.verifyAccessToken(accessToken)).toEqual(claims);
   });
 });

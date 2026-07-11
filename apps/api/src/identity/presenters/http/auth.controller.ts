@@ -19,9 +19,12 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
+import { AUTH_THROTTLE } from '@/shared/throttler/throttler.config';
 import {
   loginRequest,
   registerRequest,
@@ -48,6 +51,12 @@ import {
  */
 @ApiTags('auth')
 @Controller('auth')
+// TIGHTER rate limit than the global default (~10/min/IP vs ~100) on the whole auth
+// surface — login/register/refresh are the brute-force & credential-stuffing targets.
+// Class-level so a NEW auth route inherits the strict limit automatically; exceeding
+// it → 429 before the handler (and before bcrypt/DB work). See `AUTH_THROTTLE`.
+@Throttle(AUTH_THROTTLE)
+@ApiTooManyRequestsResponse({ description: 'Rate limit exceeded (too many auth attempts).' })
 @UseFilters(IdentityExceptionFilter)
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

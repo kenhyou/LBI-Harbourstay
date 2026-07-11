@@ -22,6 +22,19 @@ export const listingSearchQuery = z.object({
 
 export type ListingSearchQuery = z.infer<typeof listingSearchQuery>;
 
+/**
+ * Query params for `GET /listings/:id`. Both dates are optional; when BOTH are
+ * present they scope the indicative availability shown on the detail page (same
+ * "hint, re-verified at booking" semantics as the search query). Validated so
+ * every inbound query is schema-checked — no unvalidated raw strings.
+ */
+export const listingDetailQuery = z.object({
+  from: z.string().date().optional(),
+  to: z.string().date().optional(),
+});
+
+export type ListingDetailQuery = z.infer<typeof listingDetailQuery>;
+
 /** Listing kind — mirrors the Prisma `ListingType` enum. MVP ships `stay` only. */
 export const listingType = z.enum(['stay', 'tour']);
 
