@@ -17,11 +17,11 @@
 | S6a Host listings CRUD + RBAC | P4 | ☑ done | `Listing` **write aggregate** (S1 deferred stub, now filled); host CRUD + publish/unpublish behind `@Roles('host')` + per-listing ownership **404 no-leak**; `GET /host/listings[/:id]` CQRS reads (drafts included). **Learn-by-reading mode — Claude wrote all of S6a** (opt-out). 52 api suites / 295 tests + 2 Playwright green. |
 | S6b Availability blocks + host bookings | P4 | ☑ done | host blocks/unblocks date ranges (an **aggregate-owned collection** on `Listing`; overlap → 409) + `GET /host/bookings` (ownership-scoped). A blocked range **prevents a guest hold** (S3 seam, now proven: overlapping booking → 409, **zero rows written**). **Learn-by-reading — Claude-written** (opt-out). 56 api suites / 338 tests + Playwright 3/3 green. |
 | S7a Security baseline (OWASP) | P5 | ☑ done | helmet + credentialed CORS allow-list + `@nestjs/throttler` (tight on `/auth/*`) + web security headers; **JWT secret fail-fast** (prod refuses to boot on a default — the one real vuln the audit found, fixed); `docs/security-audit.md` (24 routes, no authz gap). Verified at runtime: 429 + `Retry-After`, CORS isolation, prod boot exits code 1. **Learn-by-reading — Claude-written.** 57 api suites / 345 tests green. |
-| S7b Observability + delivery metrics | P5 | ☐ | |
+| S7b Observability + delivery metrics | P5 | ☑ done | structured pino logging + **secret redaction** (auth headers/cookies/tokens → `[Redacted]`, proven live) + correlation id; **liveness/readiness split** (`/health` DB-independent = ALB-safe; new `/health/ready` → 503 on DB down, proven by pausing Postgres); `docs/build/delivery-metrics.md` (DORA from real git history). **Learn-by-reading.** 61 api suites / 357 tests green. ADR-0015. |
 | S7c Docs finalize (README + ADRs) | P5 | ☐ | |
 
 Branch: `main` (S5 merged). S6 is being built on `main` in a different mode — see below.
-**S6 (host dashboard) complete.** **S7 (Hardening) is being built learn-by-reading, split into S7a (security ✓) → S7b (observability + delivery metrics) → S7c (docs).** **Next up: S7b.** S7a verified PASS but **uncommitted** at time of writing (commit on its own branch + merge, like S6).
+**S6 (host dashboard) complete.** **S7 (Hardening), learn-by-reading, split: S7a (security ✓) → S7b (observability + delivery metrics ✓) → S7c (docs).** **Next up: S7c — the final phase (README + ADR set finalize).** S7b verified PASS but **uncommitted** at time of writing (commit on its own branch + merge, like S6/S7a).
 **⚠️ S6 learning-mode change:** for S6, Ken **opted out of scaffold-and-fill to learn by reading working code** — Claude writes all of S6 (backend aggregate/handlers + frontend, heavily commented as teaching artifacts); no fill files. This is a deliberate, S6-scoped departure from "Ken writes the core"; **reconfirm the mode at S7** rather than assume it carries forward.
 Deployed on a **private custom domain** (hostnames deliberately not recorded here): web = AWS Amplify Hosting
 (SSR/WEB_COMPUTE) · api = ALB + ACM → ECS Fargate, 1 task · db = **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
@@ -596,3 +596,45 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   >1 task (in-memory is per-task today); account-level lockout; depth security (pen-test/WAF/MFA — out
   of scope, PRD §9).
 - **Next:** S7b — Observability (pino/health) + DORA delivery-metrics doc.
+
+---
+
+## S7b — Observability + Delivery Metrics  *(learn-by-reading mode — Claude-written)*
+
+- **Shipped:** the observability baseline (PRD §13) + a DORA delivery-metrics doc. No new domain, no
+  business endpoints. Still learn-by-reading (Claude-written, commented).
+- **Structured logging + secret redaction (the key win):** `nestjs-pino` hardened in
+  `shared/logging/logger.config.ts` — JSON in prod / pretty in dev; a **correlation id** per request
+  (reuse inbound `x-request-id` else mint a UUID, echoed on the response); **`redact`** censors
+  `authorization`/`cookie` request headers, `set-cookie` **response** headers (load-bearing — this app
+  *does* log response headers, so without it the httpOnly JWT cookie would hit the logs in cleartext),
+  and `password`/`passwordHash`/`token`/`accessToken`/`refreshToken`/`clientSecret`/`secret`/Stripe-key
+  fields (bare + nested). Logging is a security surface once you auto-log requests.
+- **Health: liveness vs readiness (deploy-safe):** `GET /health` stays **DB-independent** (liveness;
+  shared `HealthResponse` unchanged) so a transient DB blip can't make ECS kill a healthy task — it
+  remains the ALB target. New `GET /health/ready` runs `SELECT 1` (readiness) → 200 `{database:'up'}` /
+  **503** on DB loss; it's the *intended* ALB target, and repointing the target group is a documented
+  infra follow-up (not changed here). Hand-rolled, no `@nestjs/terminus` (one `SELECT 1` reads clearer;
+  terminus noted as the seam).
+- **Delivery metrics:** `docs/build/delivery-metrics.md` — the four DORA keys computed from **real git
+  history** (10 days, 45 commits, 9 green-`main` slices, 1 prod deploy) with honest caveats (solo +
+  AI-assisted, no PR/CI latency, releasability-proxy for deploy frequency). The through-line: the
+  verify-before-done discipline converted the expensive bugs (crash-looping container, stuck button)
+  into *caught*-failures, not change-failures; the one escaped defect was the S4 leaked-key incident.
+- **Definition of Done:**
+  - [x] `tsc --noEmit` clean; full suite green (**61 suites / 357 tests**)
+  - [x] structured logs with correlation id; **secrets redacted** (proven live — `[Redacted]`, zero cleartext)
+  - [x] `/health` liveness unchanged + DB-independent (ALB-safe); `/health/ready` 200 up / 503 down (proven)
+  - [x] delivery-metrics doc from real git data
+  - [x] domain untouched
+- **Verifier result:** **PASS (first pass).** Paused Postgres → `/health/ready` 503, unpaused → 200,
+  while `/health` stayed 200 throughout; login with `Authorization`/`Cookie` logged `[Redacted]` and a
+  full-log grep for the plaintext secrets/JWT prefix found **zero**; correlation id generated + echoed;
+  61/357 green. One stale comment corrected post-verify (the `set-cookie` redact path is load-bearing,
+  not defence-in-depth — this app logs response headers). **Caveat:** the Stripe webhook redaction path
+  is unit-tested but **not** live-proven (needs the Stripe CLI/tunnel) — noted, not a gap.
+- **ADRs:** `adr/0015-observability-liveness-readiness-split-and-log-redaction.md`.
+- **Deferred (documented):** repoint the ALB target group to `/health/ready`; OpenTelemetry traces +
+  Sentry at the noted seam; ship logs to a queryable store (CloudWatch Insights/OpenSearch).
+- **Next:** S7c — Docs finalize (README with architecture + run instructions + live links; ADR set
+  review) — the final phase of the build.

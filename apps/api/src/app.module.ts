@@ -5,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { throttlerRootOptions } from '@/shared/throttler/throttler.config';
+import { buildPinoHttpOptions } from '@/shared/logging/logger.config';
 import { PrismaModule } from '@/infra/prisma/prisma.module';
 import { TransactionModule } from '@/shared/transaction/transaction.module';
 import { OutboxModule } from '@/shared/outbox/outbox.module';
@@ -26,13 +27,13 @@ import { NotificationsModule } from '@/notifications/notifications.module';
     // controllers for why). Enforced by the `ThrottlerGuard` registered as an
     // APP_GUARD below, so no route can forget it.
     ThrottlerModule.forRoot(throttlerRootOptions()),
+    // S7b: structured logging hardened — JSON in prod / pretty in dev, a
+    // correlation id per request (echoed on the `x-request-id` response header),
+    // and redaction of secrets (auth headers, cookies, passwords, tokens, Stripe
+    // secrets). All of that lives in one testable function so the config the
+    // server runs is the config the redaction test asserts. See logger.config.ts.
     LoggerModule.forRoot({
-      pinoHttp: {
-        transport:
-          process.env.NODE_ENV === 'production'
-            ? undefined
-            : { target: 'pino-pretty', options: { singleLine: true } },
-      },
+      pinoHttp: buildPinoHttpOptions(),
     }),
     PrismaModule,
     TransactionModule,
