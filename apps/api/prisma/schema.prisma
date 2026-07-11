@@ -141,6 +141,11 @@ model Hold {
 /// aggregate boundaries). `priceSnapshot` is the all-in quoted total in minor
 /// units, frozen at creation. `holdExpiresAt` is denormalized from the Hold so
 /// the booking summary can surface the TTL without loading the Hold.
+///
+/// S5 (My Bookings + Cancel) adds the two cancellation audit fields, both NULL
+/// until the booking is cancelled: `cancelledAt` (the moment cancel ran) and
+/// `refundAmount` (minor units, COMPUTED by the CancellationPolicy and recorded
+/// here — never issued to Stripe; refunds are out of scope, PRD §2/§6).
 model Booking {
   id            String        @id @default(uuid()) @db.Uuid
   guestId       String        @db.Uuid
@@ -153,6 +158,8 @@ model Booking {
   priceSnapshot Int
   holdExpiresAt DateTime
   createdAt     DateTime      @default(now())
+  cancelledAt   DateTime?
+  refundAmount  Int?
 
   @@index([guestId])
   @@map("booking")

@@ -6,11 +6,13 @@ import { NotificationLogPort } from '@/notifications/application/ports/notificat
 import { TestMailerAdapter } from '@/notifications/infra/adapters/test-mailer.adapter';
 import { NotificationLogRepository } from '@/notifications/infra/repositories/notification-log.repository';
 import { BookingConfirmedNotificationHandler } from '@/notifications/application/events/handlers/booking-confirmed.notification-handler';
+import { BookingCancelledNotificationHandler } from '@/notifications/application/events/handlers/booking-cancelled.notification-handler';
 
 /**
  * BC-8 Notifications (Generic — Outbox consumer). Binds the mailer + delivery
- * ledger ports to their impls and registers the `BookingConfirmed` outbox
- * consumer. No domain aggregate; reacts to the relay's `OutboxEventPublished`.
+ * ledger ports to their impls and registers the outbox consumers (`BookingConfirmed`
+ * S4, `BookingCancelled` S5). No domain aggregate; reacts to the relay's
+ * `OutboxEventPublished`.
  */
 @Module({
   imports: [CqrsModule, PrismaModule],
@@ -18,6 +20,7 @@ import { BookingConfirmedNotificationHandler } from '@/notifications/application
     { provide: MailerPort, useClass: TestMailerAdapter },
     { provide: NotificationLogPort, useClass: NotificationLogRepository },
     BookingConfirmedNotificationHandler,
+    BookingCancelledNotificationHandler,
   ],
 })
 export class NotificationsModule {}

@@ -28,6 +28,8 @@ export class BookingRepository extends BookingRepositoryPort {
         status: data.status,
         priceSnapshot: data.priceSnapshot,
         holdExpiresAt: data.holdExpiresAt,
+        cancelledAt: data.cancelledAt,
+        refundAmount: data.refundAmount,
       },
     });
   }
