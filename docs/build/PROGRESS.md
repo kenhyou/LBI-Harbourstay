@@ -18,10 +18,10 @@
 | S6b Availability blocks + host bookings | P4 | ☑ done | host blocks/unblocks date ranges (an **aggregate-owned collection** on `Listing`; overlap → 409) + `GET /host/bookings` (ownership-scoped). A blocked range **prevents a guest hold** (S3 seam, now proven: overlapping booking → 409, **zero rows written**). **Learn-by-reading — Claude-written** (opt-out). 56 api suites / 338 tests + Playwright 3/3 green. |
 | S7a Security baseline (OWASP) | P5 | ☑ done | helmet + credentialed CORS allow-list + `@nestjs/throttler` (tight on `/auth/*`) + web security headers; **JWT secret fail-fast** (prod refuses to boot on a default — the one real vuln the audit found, fixed); `docs/security-audit.md` (24 routes, no authz gap). Verified at runtime: 429 + `Retry-After`, CORS isolation, prod boot exits code 1. **Learn-by-reading — Claude-written.** 57 api suites / 345 tests green. |
 | S7b Observability + delivery metrics | P5 | ☑ done | structured pino logging + **secret redaction** (auth headers/cookies/tokens → `[Redacted]`, proven live) + correlation id; **liveness/readiness split** (`/health` DB-independent = ALB-safe; new `/health/ready` → 503 on DB down, proven by pausing Postgres); `docs/build/delivery-metrics.md` (DORA from real git history). **Learn-by-reading.** 61 api suites / 357 tests green. ADR-0015. |
-| S7c Docs finalize (README + ADRs) | P5 | ☐ | |
+| S7c Docs finalize (README + ADRs) | P5 | ☑ done | README rewritten to the finished build (status, architecture, tech stack incl. AWS deploy, run + test instructions, four headline guarantees, ADR index) + `adr/README.md` index; ADR set reviewed (15, all Accepted, sequential). **Build complete.** |
 
 Branch: `main` (S5 merged). S6 is being built on `main` in a different mode — see below.
-**S6 (host dashboard) complete.** **S7 (Hardening), learn-by-reading, split: S7a (security ✓) → S7b (observability + delivery metrics ✓) → S7c (docs).** **Next up: S7c — the final phase (README + ADR set finalize).** S7b verified PASS but **uncommitted** at time of writing (commit on its own branch + merge, like S6/S7a).
+**🎉 BUILD COMPLETE — P0 → S7 all shipped.** The full guest + host journeys run end-to-end, live on AWS, `main` green throughout. 357 backend tests + Playwright; 15 ADRs; security + observability baselines. S7 (Hardening) was learn-by-reading, split S7a (security ✓) → S7b (observability + metrics ✓) → S7c (docs ✓). **S7c uncommitted** at time of writing (commit on its own branch + merge, like the rest). Remaining items are all post-MVP follow-ups (see README §Known follow-ups); nothing on the P0–S4 cut line or the S5–S7 scope is outstanding.
 **⚠️ S6 learning-mode change:** for S6, Ken **opted out of scaffold-and-fill to learn by reading working code** — Claude writes all of S6 (backend aggregate/handlers + frontend, heavily commented as teaching artifacts); no fill files. This is a deliberate, S6-scoped departure from "Ken writes the core"; **reconfirm the mode at S7** rather than assume it carries forward.
 Deployed on a **private custom domain** (hostnames deliberately not recorded here): web = AWS Amplify Hosting
 (SSR/WEB_COMPUTE) · api = ALB + ACM → ECS Fargate, 1 task · db = **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
@@ -638,3 +638,35 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   Sentry at the noted seam; ship logs to a queryable store (CloudWatch Insights/OpenSearch).
 - **Next:** S7c — Docs finalize (README with architecture + run instructions + live links; ADR set
   review) — the final phase of the build.
+
+---
+
+## S7c — Docs Finalize  *(learn-by-reading mode — Claude-written)  ·  the final phase*
+
+- **Shipped:** the closing documentation pass. No code; the PRD §3/§5 docs bar for the finished build.
+- **README rewritten** ([README.md](../../README.md)) — it was frozen at S2 (stale status "Next: S3",
+  a Vercel/Render/Neon deploy row that never happened). Now reflects the finished build: complete
+  status, the architecture diagram + hexagon note, the nine Bounded Contexts, the real AWS deploy
+  topology, Node 22 / pnpm 9 run instructions, the Stripe-test setup note (with the `NEXT_PUBLIC_`
+  secret warning learned in the deploy), the testing guide (357 tests / 61 suites), a **"four
+  guarantees worth reading the code for"** section (overbooking `EXCLUDE`, idempotent webhook, outbox
+  atomicity, ownership 404-no-leak), and a full **ADR index**. Live hostnames deliberately not
+  published (consistent with the deploy sanitisation).
+- **ADR index added** ([adr/README.md](../../adr/README.md)) — all 15 ADRs tabulated with the slice
+  that produced each. **ADR set reviewed:** 15 records, all `Accepted`, sequentially numbered 0001–0015,
+  consistent format. The PRD asked for ≥3 (§5 G5); the decision trail is itself a deliverable.
+- **README claims verified** against the repo (not asserted blindly): `apps/api/.env.example`, `LICENSE`,
+  and the web `test:e2e` / `test:e2e:install` scripts all exist; the Swagger `/docs` + `/health/ready`
+  endpoints are real; test counts match the S7b suite (357/61).
+- **Definition of Done (S7c):**
+  - [x] README top shows the CI badge + accurate status; architecture, tech rationale, run + test
+        instructions, API-docs link, deploy section, ADR index all present and correct
+  - [x] ≥3 ADRs (15), all Accepted + indexed
+  - [x] every command/link in the README verified to exist
+- **Verifier:** n/a — docs-only phase, no runtime surface (the build's *code* was verified through S7b).
+- **Honest gaps (documented in the README §Known follow-ups, not hidden):** no **coverage badge** yet
+  (jest coverage + a badge service is a follow-up — the CI badge is present and green); infra is still
+  click-ops; CSP not enforced; single Fargate task. None are on the P0–S7 scope.
+- **🎉 Build complete:** P0 → S7 all shipped, verified, recorded. Guest + host journeys live on AWS,
+  `main` green throughout, 357 backend tests + Playwright, 15 ADRs. What remains is the post-MVP
+  follow-up list (README §Known follow-ups) — a deliberate, documented backlog, not unfinished work.
