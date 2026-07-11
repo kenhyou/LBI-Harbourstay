@@ -2,10 +2,13 @@ import {
   hostListingDetail,
   hostListingSummary,
   hostListingsResponse,
+  listingBlocksResponse,
+  type AvailabilityBlockRequest,
   type HostListingDetail,
   type HostListingSummary,
   type HostListingUpsert,
   type HostListingsResponse,
+  type ListingBlocksResponse,
 } from '@harbourstay/shared';
 
 const API_URL = process.env.API_URL ?? 'http://localhost:3001';
@@ -203,4 +206,102 @@ export async function setHostListingPublished(
     );
   }
   return hostListingSummary.parse(await res.json());
+}
+
+/* -------------------------------------------------------------------------- *
+ * S6b — Availability blocks (BC-5). A host blocks/unblocks date ranges on
+ * their OWN listing. Same auth model as above: the httpOnly cookie carries
+ * the host identity + ownership; another host's listing → 404-no-leak. The
+ * write endpoints return the FULL, refreshed block list (listingBlocksResponse)
+ * so the caller re-syncs in one round trip, and every response is re-parsed
+ * against the shared schema so contract drift surfaces here, not in the UI.
+ * -------------------------------------------------------------------------- */
+
+/**
+ * GET /host/listings/:id/blocks — the current blocked ranges for the host's OWN
+ * listing. Drives the availability page (server fetch) and re-sync after a write.
+ */
+export async function getListingBlocks(
+  id: string,
+  cookieHeader: string,
+): Promise<ListingBlocksResponse> {
+  const res = await fetch(
+    `${API_URL}/host/listings/${encodeURIComponent(id)}/blocks`,
+    {
+      headers: { cookie: cookieHeader },
+      cache: 'no-store',
+    },
+  );
+  throwForAuth(res);
+  if (res.status === 404) throw new HostListingNotFoundError(id);
+  if (!res.ok) {
+    throw new HostListingApiError(
+      `GET /host/listings/${id}/blocks responded ${res.status}`,
+    );
+  }
+  return listingBlocksResponse.parse(await res.json());
+}
+
+/**
+ * POST /host/listings/:id/blocks — block a date range. `body` is validated
+ * against `availabilityBlockRequest` (checkIn < checkOut) at the bridge before it
+ * gets here; the API is authoritative and also rejects overlaps with existing
+ * holds/bookings/blocks. A 201 returns the FULL refreshed block list.
+ */
+export async function createListingBlock(
+  id: string,
+  body: AvailabilityBlockRequest,
+  cookieHeader: string,
+): Promise<ListingBlocksResponse> {
+  const res = await fetch(
+    `${API_URL}/host/listings/${encodeURIComponent(id)}/blocks`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cookieHeader },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    },
+  );
+  throwForAuth(res);
+  if (res.status === 404) throw new HostListingNotFoundError(id);
+  if (res.status === 400 || res.status === 409 || res.status === 422) {
+    const detail = (await res.json().catch(() => null)) as {
+      message?: string;
+    } | null;
+    throw new HostListingInvalidError(detail?.message);
+  }
+  if (!res.ok) {
+    throw new HostListingApiError(
+      `POST /host/listings/${id}/blocks responded ${res.status}`,
+    );
+  }
+  return listingBlocksResponse.parse(await res.json());
+}
+
+/**
+ * DELETE /host/listings/:id/blocks/:blockId — unblock a range. Returns the FULL
+ * refreshed block list (which no longer contains `blockId`). A 404 means the
+ * listing or the block is unknown / not the caller's.
+ */
+export async function deleteListingBlock(
+  id: string,
+  blockId: string,
+  cookieHeader: string,
+): Promise<ListingBlocksResponse> {
+  const res = await fetch(
+    `${API_URL}/host/listings/${encodeURIComponent(id)}/blocks/${encodeURIComponent(blockId)}`,
+    {
+      method: 'DELETE',
+      headers: { cookie: cookieHeader },
+      cache: 'no-store',
+    },
+  );
+  throwForAuth(res);
+  if (res.status === 404) throw new HostListingNotFoundError(id);
+  if (!res.ok) {
+    throw new HostListingApiError(
+      `DELETE /host/listings/${id}/blocks/${blockId} responded ${res.status}`,
+    );
+  }
+  return listingBlocksResponse.parse(await res.json());
 }

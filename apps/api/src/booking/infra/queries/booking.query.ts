@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import type { BookingDetail, BookingStatus } from '@harbourstay/shared';
+import type {
+  BookingDetail,
+  BookingStatus,
+  HostBookingSummary,
+} from '@harbourstay/shared';
 import { PrismaService } from '@/infra/prisma/prisma.service';
 import { BookingQueryPort } from '@/booking/application/ports/booking.query.port';
 
@@ -96,6 +100,50 @@ export class BookingQuery extends BookingQueryPort {
     return rows.map((row) =>
       this.toDetail(row, titleById.get(row.listingId) ?? ''),
     );
+  }
+
+  async listForHost(hostId: string): Promise<HostBookingSummary[]> {
+    // `booking.listingId` is a plain cross-aggregate reference (no Prisma relation),
+    // so we scope by first resolving the host's listings, then reading the bookings
+    // on exactly those. This IS the ownership gate: a booking on another host's
+    // listing can never enter the `in` set.
+    const listings = await this.prisma.listing.findMany({
+      where: { hostId },
+      select: { id: true, title: true },
+    });
+    if (listings.length === 0) {
+      return [];
+    }
+    const titleById = new Map(listings.map((l) => [l.id, l.title]));
+
+    const rows = await this.prisma.booking.findMany({
+      where: { listingId: { in: [...titleById.keys()] } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        listingId: true,
+        guestId: true,
+        checkIn: true,
+        checkOut: true,
+        partySize: true,
+        status: true,
+        priceSnapshot: true,
+        createdAt: true,
+      },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      listingId: row.listingId,
+      listingTitle: titleById.get(row.listingId) ?? '',
+      guestId: row.guestId,
+      checkIn: toDateString(row.checkIn),
+      checkOut: toDateString(row.checkOut),
+      partySize: row.partySize,
+      status: row.status as BookingStatus,
+      totalPrice: row.priceSnapshot, // frozen all-in total, minor units
+      createdAt: row.createdAt.toISOString(),
+    }));
   }
 
   /** The listing's title, or '' if the listing row is gone (booking outlives it). */

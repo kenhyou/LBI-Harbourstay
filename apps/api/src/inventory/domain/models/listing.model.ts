@@ -1,10 +1,14 @@
 import { ListingId } from '@/inventory/domain/vo/listing-id.vo';
 import { Capacity } from '@/inventory/domain/vo/capacity.vo';
 import { Money } from '@/inventory/domain/vo/money.vo';
+import { DateRange } from '@/inventory/domain/vo/date-range.vo';
+import { AvailabilityBlock } from '@/inventory/domain/models/availability-block.model';
 import { ListingType } from '@/inventory/domain/enums/listing-type.enum';
 import { ListingStatus } from '@/inventory/domain/enums/listing-status.enum';
 import { InvalidListingDetailsException } from '@/inventory/domain/exceptions/invalid-listing-details.exception';
 import { InvalidListingStateException } from '@/inventory/domain/exceptions/invalid-listing-state.exception';
+import { OverlappingBlockException } from '@/inventory/domain/exceptions/overlapping-block.exception';
+import { BlockNotFoundException } from '@/inventory/domain/exceptions/block-not-found.exception';
 
 /**
  * The mutable, editable part of a listing — everything a host can change via the
@@ -33,6 +37,13 @@ export interface NewListingProps extends ListingDetails {
   hostId: string;
 }
 
+/** A single persisted block (id + its half-open range) inside a listing snapshot. */
+export interface AvailabilityBlockSnapshot {
+  id: string;
+  checkIn: Date;
+  checkOut: Date;
+}
+
 /** Full snapshot to restore a Listing from persistence (`reconstitute`). */
 export interface ListingSnapshot {
   id: string;
@@ -46,6 +57,13 @@ export interface ListingSnapshot {
   images: string[];
   status: ListingStatus;
   createdAt: Date;
+  /**
+   * The host's currently-set blocks (isBlocked rows). Optional so existing
+   * callers that only touch the details/status (create-booking's lightweight
+   * loads never reconstitute the full aggregate; publish/update DO, and now load
+   * the blocks too) don't have to supply it — absent means "no blocks".
+   */
+  blocks?: AvailabilityBlockSnapshot[];
 }
 
 /**
@@ -85,6 +103,10 @@ export class Listing {
     private _images: string[],
     private _status: ListingStatus,
     private readonly _createdAt: Date,
+    // The host's blocked ranges — child entities the aggregate owns and mutates
+    // ONLY through block()/unblock(), so the no-overlap invariant is enforced in
+    // one place. Never exposed by reference (the getter copies the array out).
+    private readonly _blocks: AvailabilityBlock[],
   ) {}
 
   /**
@@ -105,6 +127,7 @@ export class Listing {
       [...props.images], // defensive copy — don't alias the caller's array
       ListingStatus.Unpublished,
       new Date(),
+      [], // a brand-new listing has no blocks yet
     );
   }
 
@@ -127,6 +150,14 @@ export class Listing {
       [...snapshot.images],
       snapshot.status,
       snapshot.createdAt,
+      // Rehydrate each persisted block into its child entity via the trusted
+      // reconstitute path (no re-validation of already-stored ranges).
+      (snapshot.blocks ?? []).map((b) =>
+        AvailabilityBlock.reconstitute(
+          b.id,
+          DateRange.reconstitute(b.checkIn, b.checkOut),
+        ),
+      ),
     );
   }
 
@@ -163,6 +194,49 @@ export class Listing {
       throw new InvalidListingStateException(this._status, 'unpublish');
     }
     this._status = ListingStatus.Unpublished;
+  }
+
+  // ── Availability blocks (S6b) ────────────────────────────────────────────────
+  // The host takes date ranges off the market. The aggregate owns the collection
+  // and its ONE cross-block invariant (no two blocks on this listing overlap), so
+  // that rule can never be bypassed by editing the child entity directly.
+
+  /**
+   * Block a half-open `[checkIn, checkOut)` range on this listing.
+   *
+   * Guard → mutate → return: reject the block if it OVERLAPS any block the host
+   * already set (half-open, so a block ending on the day another begins is fine),
+   * otherwise mint a new `AvailabilityBlock` child, append it, and return it so the
+   * caller (handler) knows the new id without re-reading the collection.
+   *
+   * The range itself was already validated by `DateRange.create` (check-in strictly
+   * before check-out) at the call site — the aggregate only owns the CROSS-block
+   * rule here, not the intra-range one the VO guards.
+   */
+  block(range: DateRange): AvailabilityBlock {
+    const clash = this._blocks.some((existing) =>
+      existing.range.overlaps(range),
+    );
+    if (clash) {
+      throw new OverlappingBlockException(this._id.value);
+    }
+    const block = AvailabilityBlock.create(range);
+    this._blocks.push(block);
+    return block;
+  }
+
+  /**
+   * Remove the block with `blockId`. Throws `BlockNotFoundException` (→ 404) if no
+   * such block exists on this listing — see that exception for why we fail loud
+   * rather than no-op. Mutates the owned array in place (the field is `readonly`
+   * as a reference, but its contents are the aggregate's to manage).
+   */
+  unblock(blockId: string): void {
+    const index = this._blocks.findIndex((b) => b.id === blockId);
+    if (index === -1) {
+      throw new BlockNotFoundException(blockId);
+    }
+    this._blocks.splice(index, 1);
   }
 
   /** Non-empty-title invariant, in one place so create + updateDetails share it. */
@@ -223,5 +297,14 @@ export class Listing {
 
   get createdAt(): Date {
     return new Date(this._createdAt);
+  }
+
+  /**
+   * The host's current blocks, as a COPY of the array (callers can't add/remove a
+   * block by mutating what they get back — only `block()`/`unblock()` can). The
+   * child entities themselves are immutable, so a shallow copy is enough.
+   */
+  get blocks(): AvailabilityBlock[] {
+    return [...this._blocks];
   }
 }

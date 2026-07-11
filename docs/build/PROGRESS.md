@@ -15,11 +15,11 @@
 | **Deploy (cut line)** | §12 | ☑ done | **live on AWS**, on a private custom domain — web (Amplify SSR) → api (ALB → ECS Fargate) → RDS Postgres 16. Real Stripe test-card payment: webhook `200` → outbox relay delivered `BookingConfirmed` **1s later**, exactly once. |
 | S5 My bookings + cancel | M5 | ☑ done | `GET /me/bookings` + detail; policy-aware cancel (`Booking.cancel(outcome, now)` + `hold.release()` + `BookingCancelled` outbox in one txn); refund **computed, not issued**. **Ken wrote the CancellationPolicy VO + `cancel()`**; the command handler + React dialog were Claude-written (opt-out). 238 api tests + Playwright cancel journey green. |
 | S6a Host listings CRUD + RBAC | P4 | ☑ done | `Listing` **write aggregate** (S1 deferred stub, now filled); host CRUD + publish/unpublish behind `@Roles('host')` + per-listing ownership **404 no-leak**; `GET /host/listings[/:id]` CQRS reads (drafts included). **Learn-by-reading mode — Claude wrote all of S6a** (opt-out). 52 api suites / 295 tests + 2 Playwright green. |
-| S6b Availability blocks + host bookings | P4 | ☐ | |
+| S6b Availability blocks + host bookings | P4 | ☑ done | host blocks/unblocks date ranges (an **aggregate-owned collection** on `Listing`; overlap → 409) + `GET /host/bookings` (ownership-scoped). A blocked range **prevents a guest hold** (S3 seam, now proven: overlapping booking → 409, **zero rows written**). **Learn-by-reading — Claude-written** (opt-out). 56 api suites / 338 tests + Playwright 3/3 green. |
 | S7 Hardening | P5 | ☐ | |
 
 Branch: `main` (S5 merged). S6 is being built on `main` in a different mode — see below.
-**S6 split into S6a (done) + S6b (next).** **Next up: S6b — Availability blocks + host bookings.** Depends on S6a.
+**S6 split into S6a + S6b — both done. S6 (host dashboard) is complete.** **Next up: S7 — Hardening** (reconfirm the learning mode there). S6b verified PASS but **uncommitted** at time of writing (to be committed on its own branch + merged, like S6a).
 **⚠️ S6 learning-mode change:** for S6, Ken **opted out of scaffold-and-fill to learn by reading working code** — Claude writes all of S6 (backend aggregate/handlers + frontend, heavily commented as teaching artifacts); no fill files. This is a deliberate, S6-scoped departure from "Ken writes the core"; **reconfirm the mode at S7** rather than assume it carries forward.
 Deployed on a **private custom domain** (hostnames deliberately not recorded here): web = AWS Amplify Hosting
 (SSR/WEB_COMPUTE) · api = ALB + ACM → ECS Fargate, 1 task · db = **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
@@ -484,3 +484,66 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   (weekend uplift, LOS discounts — DESIGN.md §Pricing); MVP is a single editable base price. Image
   **upload** to object storage (the editor takes image URLs/paths as text for now).
 - **Next:** S6b — Availability blocks + host bookings.
+
+---
+
+## S6b — Availability Blocks + Host Bookings  *(learn-by-reading mode — Claude-written)*
+
+- **Shipped:** the host dashboard is complete. A host **blocks/unblocks date ranges** on their own
+  listings, and a **blocked range prevents a guest from booking it**; a host also **sees all bookings
+  across their listings** (`GET /host/bookings`). BC-2 Availability & Inventory (blocks on `Listing`) +
+  BC-1 Booking (host bookings read + the enforcement seam).
+- **The headline guarantee (proven at the storage layer):** a blocked range has **teeth**. Blocking
+  `2027-06-10..06-20` then attempting to book over it → **409 `DATES_NOT_AVAILABLE`** with **zero rows
+  written** to `booking` *or* `hold` (transaction rolled back); a non-overlapping range and the
+  half-open boundary (check-in == block's check-out) both book fine. The enforcement seam
+  (`CreateBookingHandler` → `hasBlockingBlock` → `DatesNotAvailableException`) was **designed in S3**
+  but never exercisable until something could create a block — S6b makes it real. See **ADR-0013**.
+- **The modelling decision (ADR-0013):** blocks are a **child collection *inside* the `Listing`
+  aggregate** (`listing.block(range)` / `unblock(id)`; no-self-overlap invariant → 409; unknown
+  unblock id → 404) — the **opposite** of `Hold`'s own-aggregate decision (ADR-0007), and on purpose:
+  blocks change on the low-frequency *host cadence* with a *single-listing* invariant, so the
+  whole-listing-load cost that damns holds is irrelevant here (DESIGN.md §BC-2). The repository
+  persists the collection by an **id-keyed diff inside the write transaction**; `reconstitute` loads
+  the `isBlocked=true` rows. No migration — the `availability_block` table has existed since S1.
+- **Contract added:** `availabilityBlockRequest` (`{checkIn,checkOut}`, checkIn<checkOut, YYYY-MM-DD),
+  `availabilityBlock` (`{id,checkIn,checkOut}`), `listingBlocksResponse` (also the POST/DELETE return,
+  so the client re-syncs in one round trip) in `listing.ts`; `hostBookingSummary`
+  (`{id,listingId,listingTitle,guestId,checkIn,checkOut,partySize,status,totalPrice,createdAt}` —
+  guest identity limited to `guestId`, **no PII**) + `hostBookingsResponse` in `booking.ts`. Reuses
+  `bookingStatus` + the existing date-string convention; money integer minor units (ADR-0005).
+- **Backend (`apps/api`):** `inventory` — extended `Listing` with the `AvailabilityBlock` child +
+  `block`/`unblock` (+ `OverlappingBlockException` 409 / `BlockNotFoundException` 404); `BlockDates` /
+  `UnblockDates` handlers (ownership 404-no-leak); `GET /host/listings/:id/blocks` read; mapper/repo
+  do the collection diff in the write txn. `booking` — `GET /host/bookings` host-scoped read
+  (join `booking` → the host's listing ids, no PII) as a sibling `HostBookingController`; the
+  block→hold enforcement proof (`create-booking-blocked.integration.spec.ts`). All host routes
+  `JwtCookieGuard` + `RolesGuard` + `@Roles('host')`. `inventory/domain` stays framework/ORM-free.
+- **Frontend (`apps/web`):** `components/availability-manager.tsx` (the reading centerpiece — a client
+  component with a live blocks list + add-range form + per-row remove, **explicitly resetting its
+  in-flight flags on success to avoid the S6a stuck-button bug**); dedicated
+  `/host/listings/[id]/availability` route (linked per card); `/host/bookings` RSC table (status badge,
+  `formatPrice` at the display edge, truncated guest id); cookie-bridge routes; typed clients
+  re-parsing the shared schemas. Consumes `@harbourstay/shared`, no redefined types.
+- **Definition of Done:**
+  - [x] contract shared both ends, no dup type
+  - [x] `tsc --noEmit` clean (api + web); `next build` compiles
+  - [x] `inventory/domain` framework/ORM-free; host bookings read bypasses the domain (CQRS)
+  - [x] RBAC (401/403) + ownership 404-no-leak on block routes (foreign listing ≡ unknown, two live hosts)
+  - [x] **a blocked range prevents a guest hold** — proven at the DB layer (0 rows on the 409s)
+  - [x] host bookings ownership-scoped (host A never sees host B's bookings — both directions)
+  - [x] both apps run; block/unblock + host-bookings work in the browser
+- **Verifier result:** **PASS (first pass)** — no bug this slice (contrast S6a). Block CRUD (201 with the
+  updated list / 200 delete / 400 bad range / 409 overlap / 404 unknown block); ownership 404-no-leak
+  across two hosts; the headline block→booking-rejection proven with `psql` row counts; cross-host
+  booking isolation grep-verified both ways; `totalPrice` integer minor units everywhere; Playwright
+  `host-availability` 3/3; 56 suites / 338 tests green.
+- **ADRs:** `adr/0013-availability-blocks-inside-listing-aggregate-enforced-at-hold-time.md`.
+- **Deferred (stretch / not S6 scope):** per-range `price` overrides + block `reason` (table has the
+  `price` column; deferred with the rate-rules cut); a new block does **not** retro-affect an existing
+  confirmed booking on those dates (gates future holds only); surfacing blocked ranges in the
+  guest-side availability calendar; image upload to object storage.
+- **S6 complete:** host dashboard done end to end (S6a listings CRUD + RBAC, S6b availability + host
+  bookings). **Next:** S7 — Hardening (E2E breadth, OWASP baseline, observability, delivery-metrics
+  doc, ADRs finalized). **⚠️ Reconfirm the learning mode at S7** — S6 was learn-by-reading (Claude-
+  written); the default is Ken writing the core.

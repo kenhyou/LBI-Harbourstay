@@ -18,6 +18,15 @@ import { PrismaService } from '@/infra/prisma/prisma.service';
 import { Listing } from '@/inventory/domain/models/listing.model';
 import { ListingType } from '@/inventory/domain/enums/listing-type.enum';
 import { ListingStatus } from '@/inventory/domain/enums/listing-status.enum';
+import { DateRange } from '@/inventory/domain/vo/date-range.vo';
+
+/** A half-open `[in, out)` inventory range from two `YYYY-MM-DD` strings. */
+function range(checkIn: string, checkOut: string): DateRange {
+  return DateRange.create(
+    new Date(`${checkIn}T00:00:00.000Z`),
+    new Date(`${checkOut}T00:00:00.000Z`),
+  );
+}
 
 /**
  * S6a `Listing` write side against a REAL Postgres (Testcontainers): the REAL
@@ -170,5 +179,76 @@ describe('ListingRepository + HostListingsQuery (integration, real Postgres)', (
     expect(await query.getDetailForHost(draft.id, HOST_B)).toBeNull();
     // An unknown id is likewise null.
     expect(await query.getDetailForHost(randomUUID(), HOST_A)).toBeNull();
+  });
+
+  describe('availability blocks (S6b) — collection persistence', () => {
+    it('inserts new blocks on save and rehydrates them on findById', async () => {
+      const listing = newListing(HOST_A, 'Blockable Loft');
+      listing.block(range('2026-09-01', '2026-09-05'));
+      listing.block(range('2026-09-10', '2026-09-12'));
+      await repo.save(listing);
+
+      const found = await repo.findById(listing.id);
+      expect(found?.blocks).toHaveLength(2);
+
+      // The DB holds exactly the two isBlocked rows for this listing.
+      const dbRows = await prisma.availabilityBlock.count({
+        where: { listingId: listing.id, isBlocked: true },
+      });
+      expect(dbRows).toBe(2);
+    });
+
+    it('deletes a removed block on the next save (collection diff), keeping the rest', async () => {
+      const listing = newListing(HOST_A, 'Diff Loft');
+      const first = listing.block(range('2026-10-01', '2026-10-05'));
+      listing.block(range('2026-10-10', '2026-10-12'));
+      await repo.save(listing);
+
+      // Reload, remove one block, save again — the repo must DELETE just that row.
+      const reloaded = await repo.findById(listing.id);
+      reloaded!.unblock(first.id);
+      await repo.save(reloaded!);
+
+      const after = await repo.findById(listing.id);
+      expect(after?.blocks).toHaveLength(1);
+      expect(after?.blocks[0].range.checkIn).toEqual(
+        new Date('2026-10-10T00:00:00.000Z'),
+      );
+
+      const dbRows = await prisma.availabilityBlock.count({
+        where: { listingId: listing.id, isBlocked: true },
+      });
+      expect(dbRows).toBe(1);
+    });
+
+    it('an unrelated save (publish) preserves the existing blocks', async () => {
+      const listing = newListing(HOST_A, 'Publish-With-Blocks');
+      listing.block(range('2026-11-01', '2026-11-03'));
+      await repo.save(listing);
+
+      const reloaded = await repo.findById(listing.id);
+      reloaded!.publish(); // does not touch blocks
+      await repo.save(reloaded!);
+
+      const after = await repo.findById(listing.id);
+      expect(after?.status).toBe(ListingStatus.Published);
+      expect(after?.blocks).toHaveLength(1); // block survived the publish save
+    });
+
+    it('projects a listing\'s blocks (calendar order), scoped to the owner (404-no-leak)', async () => {
+      const listing = newListing(HOST_A, 'Block-Read Loft');
+      listing.block(range('2026-12-10', '2026-12-12'));
+      listing.block(range('2026-12-01', '2026-12-03'));
+      await repo.save(listing);
+
+      const blocks = await query.listBlocksForHost(listing.id, HOST_A);
+      expect(blocks).not.toBeNull();
+      // Ordered by check-in ascending.
+      expect(blocks!.map((b) => b.checkIn)).toEqual(['2026-12-01', '2026-12-10']);
+
+      // Another host reading it → null (→ 404 no-leak). Unknown id → null too.
+      expect(await query.listBlocksForHost(listing.id, HOST_B)).toBeNull();
+      expect(await query.listBlocksForHost(randomUUID(), HOST_A)).toBeNull();
+    });
   });
 });

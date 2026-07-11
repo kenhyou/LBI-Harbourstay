@@ -120,3 +120,47 @@ export type HostListingDetail = z.infer<typeof hostListingDetail>;
 export const hostListingsResponse = z.array(hostListingSummary);
 
 export type HostListingsResponse = z.infer<typeof hostListingsResponse>;
+
+/**
+ * Contracts for the S6b Availability Blocks write side (BC-5). A host blocks or
+ * unblocks a date range on their OWN listing; a block is a host-owned
+ * `unavailableRange` with `reason: 'blocked'` (see `booking.ts`). Same wire
+ * conventions: calendar dates as `YYYY-MM-DD` strings, half-open `[checkIn,
+ * checkOut)`. No `reason`/`price` fields yet — deferred this slice.
+ */
+
+/**
+ * Body for `POST /host/listings/:id/blocks`. The listing id is a path param, so
+ * the body is just the range. The `.refine` rejects inverted/zero-night ranges
+ * at the contract boundary; string comparison is correct for `YYYY-MM-DD`,
+ * mirroring `createBookingRequest`.
+ */
+export const availabilityBlockRequest = z
+  .object({
+    checkIn: z.string().date(),
+    checkOut: z.string().date(),
+  })
+  .refine((b) => b.checkIn < b.checkOut, {
+    message: 'checkOut must be after checkIn',
+    path: ['checkOut'],
+  });
+
+export type AvailabilityBlockRequest = z.infer<typeof availabilityBlockRequest>;
+
+/** One persisted host block: an id plus its half-open `[checkIn, checkOut)` range. */
+export const availabilityBlock = z.object({
+  id: z.string().uuid(),
+  checkIn: z.string().date(),
+  checkOut: z.string().date(),
+});
+
+export type AvailabilityBlock = z.infer<typeof availabilityBlock>;
+
+/**
+ * Response for `GET /host/listings/:id/blocks`, and also returned by the POST
+ * (create) and DELETE (remove) so the client re-syncs the full block list in
+ * one round trip.
+ */
+export const listingBlocksResponse = z.array(availabilityBlock);
+
+export type ListingBlocksResponse = z.infer<typeof listingBlocksResponse>;

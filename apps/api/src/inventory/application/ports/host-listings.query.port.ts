@@ -1,4 +1,8 @@
-import type { HostListingDetail, HostListingSummary } from '@harbourstay/shared';
+import type {
+  HostListingDetail,
+  HostListingSummary,
+  ListingBlocksResponse,
+} from '@harbourstay/shared';
 
 /**
  * Read-side (CQRS) port for the host dashboard. Projects Prisma `listing` rows
@@ -23,4 +27,15 @@ export abstract class HostListingsQueryPort {
     id: string,
     hostId: string,
   ): Promise<HostListingDetail | null>;
+
+  /**
+   * The host's current blocks on one listing (calendar order) IFF the listing
+   * exists AND belongs to `hostId`, else `null` (the handler turns null into a
+   * 404-no-leak). A pure projection off the `availability_block` rows — no
+   * aggregate is loaded on the read path.
+   */
+  abstract listBlocksForHost(
+    listingId: string,
+    hostId: string,
+  ): Promise<ListingBlocksResponse | null>;
 }

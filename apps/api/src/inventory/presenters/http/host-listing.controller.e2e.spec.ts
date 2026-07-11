@@ -220,4 +220,99 @@ describe('Host listings HTTP journey (e2e, real Postgres)', () => {
       .expect(200);
     expect(res.body.status).toBe('Unpublished');
   });
+
+  // ── Availability blocks (S6b) ────────────────────────────────────────────────
+
+  let blockId: string;
+
+  it('starts with no blocks on the listing', async () => {
+    const res = await request(server())
+      .get(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', hostACookies)
+      .expect(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('blocks a date range (201) and returns the updated list', async () => {
+    const res = await request(server())
+      .post(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', hostACookies)
+      .send({ checkIn: '2026-09-01', checkOut: '2026-09-05' })
+      .expect(201);
+
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      checkIn: '2026-09-01',
+      checkOut: '2026-09-05',
+    });
+    blockId = res.body[0].id;
+  });
+
+  it('rejects an inverted range at the Zod boundary (400)', async () => {
+    await request(server())
+      .post(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', hostACookies)
+      .send({ checkIn: '2026-09-05', checkOut: '2026-09-01' })
+      .expect(400);
+  });
+
+  it('409s when a new block overlaps an existing one', async () => {
+    await request(server())
+      .post(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', hostACookies)
+      .send({ checkIn: '2026-09-04', checkOut: '2026-09-08' })
+      .expect(409);
+  });
+
+  it('allows a back-to-back block (half-open, no overlap)', async () => {
+    const res = await request(server())
+      .post(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', hostACookies)
+      .send({ checkIn: '2026-09-05', checkOut: '2026-09-08' })
+      .expect(201);
+    expect(res.body).toHaveLength(2);
+  });
+
+  it('404-no-leaks a block POST on host A\'s listing for host B (never 403)', async () => {
+    await request(server())
+      .post(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', hostBCookies)
+      .send({ checkIn: '2026-10-01', checkOut: '2026-10-03' })
+      .expect(404);
+  });
+
+  it('403s a guest / 401s anon on the blocks routes', async () => {
+    await request(server())
+      .get(`/host/listings/${listingId}/blocks`)
+      .set('Cookie', guestCookies)
+      .expect(403);
+    await request(server()).get(`/host/listings/${listingId}/blocks`).expect(401);
+  });
+
+  it('removes a block (200) and returns the shrunk list', async () => {
+    const res = await request(server())
+      .delete(`/host/listings/${listingId}/blocks/${blockId}`)
+      .set('Cookie', hostACookies)
+      .expect(200);
+    expect(res.body).toHaveLength(1); // one of the two remains
+    expect(res.body.some((b: { id: string }) => b.id === blockId)).toBe(false);
+  });
+
+  it('404s deleting an unknown block id on an owned listing', async () => {
+    await request(server())
+      .delete(
+        `/host/listings/${listingId}/blocks/00000000-0000-4000-8000-0000000000ff`,
+      )
+      .set('Cookie', hostACookies)
+      .expect(404);
+  });
+
+  it('404-no-leaks a block DELETE for host B', async () => {
+    await request(server())
+      .delete(
+        `/host/listings/${listingId}/blocks/00000000-0000-4000-8000-0000000000ff`,
+      )
+      .set('Cookie', hostBCookies)
+      .expect(404);
+  });
 });

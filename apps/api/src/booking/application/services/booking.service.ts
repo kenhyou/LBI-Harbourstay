@@ -5,12 +5,14 @@ import type {
   BookingSummary,
   CancelBookingResponse,
   CreateBookingRequest,
+  HostBookingsResponse,
   MyBookingsResponse,
 } from '@harbourstay/shared';
 import { CreateBookingCommand } from '@/booking/application/commands/create-booking.command';
 import { CancelBookingCommand } from '@/booking/application/commands/cancel-booking.command';
 import { GetBookingQuery } from '@/booking/application/queries/get-booking.query';
 import { MyBookingsQuery } from '@/booking/application/queries/my-bookings.query';
+import { HostBookingsQuery } from '@/booking/application/queries/host-bookings.query';
 
 /**
  * Thin CommandBus/QueryBus facade for BC-1. The controller talks only to this; it
@@ -46,6 +48,11 @@ export class BookingService {
   /** The current guest's bookings, newest first. */
   listMine(guestId: string): Promise<MyBookingsResponse> {
     return this.queryBus.execute(new MyBookingsQuery(guestId));
+  }
+
+  /** Every booking across the host's listings, newest first (host-scoped). */
+  listForHost(hostId: string): Promise<HostBookingsResponse> {
+    return this.queryBus.execute(new HostBookingsQuery(hostId));
   }
 
   /** Cancel the guest's own booking within policy; returns the cancellation outcome. */

@@ -5,11 +5,13 @@ import { InventoryModule } from '@/inventory/inventory.module';
 import { IdentityModule } from '@/identity/identity.module';
 import { OutboxModule } from '@/shared/outbox/outbox.module';
 import { BookingController } from '@/booking/presenters/http/booking.controller';
+import { HostBookingController } from '@/booking/presenters/http/host-booking.controller';
 import { BookingService } from '@/booking/application/services/booking.service';
 import { CreateBookingHandler } from '@/booking/application/commands/handlers/create-booking.command.handler';
 import { CancelBookingHandler } from '@/booking/application/commands/handlers/cancel-booking.command.handler';
 import { GetBookingHandler } from '@/booking/application/queries/handlers/get-booking.query.handler';
 import { MyBookingsHandler } from '@/booking/application/queries/handlers/my-bookings.query.handler';
+import { HostBookingsHandler } from '@/booking/application/queries/handlers/host-bookings.query.handler';
 import { BookingRepositoryPort } from '@/booking/application/ports/booking.repository.port';
 import { BookingQueryPort } from '@/booking/application/ports/booking.query.port';
 import { CancellationPolicyProviderPort } from '@/booking/application/ports/cancellation-policy.provider.port';
@@ -18,7 +20,7 @@ import { BookingQuery } from '@/booking/infra/queries/booking.query';
 import { StandardCancellationPolicyProvider } from '@/booking/infra/adapters/standard-cancellation-policy.provider';
 
 const commandHandlers = [CreateBookingHandler, CancelBookingHandler];
-const queryHandlers = [GetBookingHandler, MyBookingsHandler];
+const queryHandlers = [GetBookingHandler, MyBookingsHandler, HostBookingsHandler];
 
 /**
  * BC-1 Booking. Binds the booking write/read/policy ports to their impls, registers
@@ -33,7 +35,7 @@ const queryHandlers = [GetBookingHandler, MyBookingsHandler];
  */
 @Module({
   imports: [CqrsModule, PrismaModule, InventoryModule, IdentityModule, OutboxModule],
-  controllers: [BookingController],
+  controllers: [BookingController, HostBookingController],
   providers: [
     BookingService,
     { provide: BookingRepositoryPort, useClass: BookingRepository },

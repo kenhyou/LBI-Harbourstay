@@ -1,17 +1,22 @@
 import { Injectable } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import type {
+  AvailabilityBlockRequest,
   HostListingDetail,
   HostListingSummary,
   HostListingUpsert,
   HostListingsResponse,
+  ListingBlocksResponse,
 } from '@harbourstay/shared';
 import { CreateListingCommand } from '@/inventory/application/commands/create-listing.command';
 import { UpdateListingCommand } from '@/inventory/application/commands/update-listing.command';
 import { PublishListingCommand } from '@/inventory/application/commands/publish-listing.command';
 import { UnpublishListingCommand } from '@/inventory/application/commands/unpublish-listing.command';
+import { BlockDatesCommand } from '@/inventory/application/commands/block-dates.command';
+import { UnblockDatesCommand } from '@/inventory/application/commands/unblock-dates.command';
 import { GetHostListingsQuery } from '@/inventory/application/queries/get-host-listings.query';
 import { GetHostListingDetailQuery } from '@/inventory/application/queries/get-host-listing-detail.query';
+import { GetListingBlocksQuery } from '@/inventory/application/queries/get-listing-blocks.query';
 
 /**
  * Thin CommandBus/QueryBus facade for the host-listings surface (BC-2 write side /
@@ -62,6 +67,35 @@ export class HostListingService {
   getMineDetail(hostId: string, listingId: string): Promise<HostListingDetail> {
     return this.queryBus.execute(
       new GetHostListingDetailQuery(hostId, listingId),
+    );
+  }
+
+  // ── Availability blocks (S6b) ────────────────────────────────────────────────
+
+  /** The host's current blocks on one of their listings (404-no-leak in the handler). */
+  listBlocks(hostId: string, listingId: string): Promise<ListingBlocksResponse> {
+    return this.queryBus.execute(new GetListingBlocksQuery(hostId, listingId));
+  }
+
+  /** Block a date range; returns the full, re-synced block list. */
+  addBlock(
+    hostId: string,
+    listingId: string,
+    body: AvailabilityBlockRequest,
+  ): Promise<ListingBlocksResponse> {
+    return this.commandBus.execute(
+      new BlockDatesCommand(hostId, listingId, body.checkIn, body.checkOut),
+    );
+  }
+
+  /** Remove one block by id; returns the full, re-synced block list. */
+  removeBlock(
+    hostId: string,
+    listingId: string,
+    blockId: string,
+  ): Promise<ListingBlocksResponse> {
+    return this.commandBus.execute(
+      new UnblockDatesCommand(hostId, listingId, blockId),
     );
   }
 }
