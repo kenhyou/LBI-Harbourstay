@@ -46,7 +46,8 @@ const queryHandlers = [GetCurrentUserHandler];
     ...queryHandlers,
   ],
   // Exported so other BCs (e.g. BC-1 Booking) can guard routes with the shared
-  // cookie auth without re-binding the AuthTokenPort.
-  exports: [JwtCookieGuard, AuthTokenPort],
+  // cookie auth without re-binding the AuthTokenPort. `RolesGuard` is exported for
+  // BC-2's host surface (S6a) — the first route to combine JwtCookieGuard + RBAC.
+  exports: [JwtCookieGuard, RolesGuard, AuthTokenPort],
 })
 export class IdentityModule {}
