@@ -60,3 +60,29 @@ export async function requireUser(nextPath?: string): Promise<AuthUser> {
   }
   return user;
 }
+
+/**
+ * Server-side ROLE guard for the host dashboard (S6). Layered on requireUser:
+ *  - signed out            → /login?next= (come back after logging in)
+ *  - signed in but a guest → /host/forbidden (a visible 403, not a login loop —
+ *    logging in again wouldn't help; the account simply lacks the host role)
+ *
+ * This is the authoritative guard for every /host route: it runs on the server
+ * before any host UI renders, so a guest can never see another host's listings
+ * even with client JS disabled or tampered with. The API enforces the same rule
+ * again from the cookie (403 for non-hosts), so this is defence-in-depth, not
+ * the only line. `redirect()` returns `never`, which also narrows `user` to a
+ * non-null AuthUser for the caller after this returns.
+ */
+export async function requireHost(nextPath?: string): Promise<AuthUser> {
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect(
+      nextPath ? `/login?next=${encodeURIComponent(nextPath)}` : '/login',
+    );
+  }
+  if (user.role !== 'host') {
+    redirect('/host/forbidden');
+  }
+  return user;
+}

@@ -30,6 +30,15 @@ export async function SiteHeader() {
 
           {user ? (
             <>
+              {user.role === 'host' && (
+                <Link
+                  href="/host/listings"
+                  data-testid="header-host-link"
+                  className="text-gray-600 transition hover:text-gray-900"
+                >
+                  Host
+                </Link>
+              )}
               <Link
                 href="/account"
                 data-testid="header-user-email"

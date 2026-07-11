@@ -1,11 +1,18 @@
-import { PrismaClient, ListingType, ListingStatus } from '@prisma/client';
+import { PrismaClient, ListingType, ListingStatus, UserRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 /**
- * S1 demo seed — ~7 listings (6 Published + 1 Unpublished to prove the filter),
- * varied locations/prices/types, a couple with images, plus availability blocks.
+ * Demo seed.
  *
- * Listing ids are DETERMINISTIC UUIDs so integration tests and Playwright can
- * deep-link (`/listings/<id>`) without first querying for one.
+ * S1: ~7 listings (6 Published + 1 Unpublished to prove the filter), varied
+ * locations/prices/types, a couple with images, plus availability blocks. Listing
+ * ids are DETERMINISTIC UUIDs so integration tests and Playwright can deep-link
+ * (`/listings/<id>`) without first querying for one.
+ *
+ * S6a: a real HOST user (`host@harbourstay.test`) that OWNS every seeded listing,
+ * so the host dashboard isn't empty in the browser. Its id matches the `hostId`
+ * already stamped on the S1 listings, so the write side (edit/publish) and the
+ * ownership 404-no-leak work against real seed data out of the box.
  */
 
 const prisma = new PrismaClient();
@@ -22,6 +29,11 @@ const IDS = {
 } as const;
 
 const HOST_ID = '00000000-0000-4000-8000-000000000001';
+// Known host login for the dashboard / verifier. bcrypt cost 12 (ADR-0006),
+// matching BcryptPasswordHasher, so this hash validates through the normal
+// /auth/login path.
+const HOST_EMAIL = 'host@harbourstay.test';
+const HOST_PASSWORD = 'password123';
 
 function d(iso: string): Date {
   return new Date(`${iso}T00:00:00.000Z`);
@@ -31,6 +43,19 @@ async function main(): Promise<void> {
   // Idempotent: FK cascade clears blocks when listings go.
   await prisma.availabilityBlock.deleteMany();
   await prisma.listing.deleteMany();
+
+  // The host that owns the seeded listings. Upsert so re-seeding is idempotent and
+  // the password hash refreshes. Its id === HOST_ID, the `hostId` on every listing.
+  await prisma.user.upsert({
+    where: { id: HOST_ID },
+    update: {},
+    create: {
+      id: HOST_ID,
+      email: HOST_EMAIL,
+      passwordHash: await bcrypt.hash(HOST_PASSWORD, 12),
+      role: UserRole.host,
+    },
+  });
 
   await prisma.listing.createMany({
     data: [
@@ -154,7 +179,10 @@ async function main(): Promise<void> {
 
   const count = await prisma.listing.count();
   // eslint-disable-next-line no-console
-  console.log(`Seeded ${count} listings (6 Published + 1 Unpublished).`);
+  console.log(
+    `Seeded ${count} listings (6 Published + 1 Unpublished), all owned by ` +
+      `${HOST_EMAIL} (password: ${HOST_PASSWORD}).`,
+  );
 }
 
 main()

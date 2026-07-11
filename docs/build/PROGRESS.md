@@ -14,11 +14,13 @@
 | S4 Payment Saga | P3 | ☑ done | Stripe test-mode PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms booking + commits Hold → Transactional Outbox → email; **Ken wrote the Payment domain + the saga**; browser payment (`4242…`) flips the page to Confirmed; 211 api tests green. **cut line** |
 | **Deploy (cut line)** | §12 | ☑ done | **live on AWS**, on a private custom domain — web (Amplify SSR) → api (ALB → ECS Fargate) → RDS Postgres 16. Real Stripe test-card payment: webhook `200` → outbox relay delivered `BookingConfirmed` **1s later**, exactly once. |
 | S5 My bookings + cancel | M5 | ☑ done | `GET /me/bookings` + detail; policy-aware cancel (`Booking.cancel(outcome, now)` + `hold.release()` + `BookingCancelled` outbox in one txn); refund **computed, not issued**. **Ken wrote the CancellationPolicy VO + `cancel()`**; the command handler + React dialog were Claude-written (opt-out). 238 api tests + Playwright cancel journey green. |
-| S6 Host dashboard | P4 | ☐ | |
+| S6a Host listings CRUD + RBAC | P4 | ☑ done | `Listing` **write aggregate** (S1 deferred stub, now filled); host CRUD + publish/unpublish behind `@Roles('host')` + per-listing ownership **404 no-leak**; `GET /host/listings[/:id]` CQRS reads (drafts included). **Learn-by-reading mode — Claude wrote all of S6a** (opt-out). 52 api suites / 295 tests + 2 Playwright green. |
+| S6b Availability blocks + host bookings | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
-Branch: `s5-cancel` (off `main`; not yet committed at time of writing).
-**Next up: S6 — Host dashboard** (listing CRUD + availability/rate mgmt + host bookings, RBAC). Depends on S1/S2. Next slice defaults back to Ken writing the handlers.
+Branch: `main` (S5 merged). S6 is being built on `main` in a different mode — see below.
+**S6 split into S6a (done) + S6b (next).** **Next up: S6b — Availability blocks + host bookings.** Depends on S6a.
+**⚠️ S6 learning-mode change:** for S6, Ken **opted out of scaffold-and-fill to learn by reading working code** — Claude writes all of S6 (backend aggregate/handlers + frontend, heavily commented as teaching artifacts); no fill files. This is a deliberate, S6-scoped departure from "Ken writes the core"; **reconfirm the mode at S7** rather than assume it carries forward.
 Deployed on a **private custom domain** (hostnames deliberately not recorded here): web = AWS Amplify Hosting
 (SSR/WEB_COMPUTE) · api = ALB + ACM → ECS Fargate, 1 task · db = **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
 Runbook: [docs/DEPLOY.md](../DEPLOY.md) · topology rationale: `adr/0010-aws-deploy-ecs-fargate-behind-alb.md`.
@@ -402,3 +404,83 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
   refund when settlement enters scope; host-initiated cancellation (S6); a full focus-trap on the dialog
   (basic a11y done; hardening in S7).
 - **Next:** S6 — Host dashboard.
+
+---
+
+## S6a — Host Listings CRUD + RBAC  *(learn-by-reading mode — Claude-written)*
+
+- **Shipped:** a signed-in **host** creates, edits, and publishes/unpublishes their **own** listings
+  from a dashboard (`/host/listings`, `/host/listings/new`, `/host/listings/[id]/edit`), behind role
+  `host` + per-listing ownership. This introduces the **`Listing` write aggregate** — BC-2's write
+  side that DESIGN.md §BC-2 carried as a deferred stub since S1 (which built only the read projection).
+  First real use of the S2 `@Roles('host')` RBAC. BC-2 Availability & Inventory (write) + BC-6 Host
+  Management command surface + BC-7 Identity (RBAC).
+- **⚠️ Learning-mode change (recorded):** for S6, **Ken opted out of scaffold-and-fill to learn by
+  reading working code.** All of S6a — the `Listing` aggregate + VOs, the four command handlers, the
+  host read queries, AND the frontend (pages, editor form, the `publish-toggle` primer) — was written
+  by Claude as heavily-commented teaching artifacts (matching the annotated `cancel-booking-dialog.tsx`
+  style), **not** implemented by Ken. This is a deliberate, S6-scoped departure from the project's
+  "Ken writes the core" purpose; the honest trade-off (reading builds recognition, not production
+  muscle) was flagged. **Mode reverts to fill at S7 unless Ken decides otherwise.**
+- **The two authorization decisions (ADR-0012):** two *independent* layers, deliberately different
+  codes. (1) **Role → 403 at the guard:** anonymous → 401, signed-in guest → 403 on any `/host/*`,
+  before any handler runs. (2) **Ownership → 404 no-leak in the handler/query:** `hostId` comes from
+  `@CurrentUser()` (never body/params); every op is scoped to `{ id, hostId }`, so a foreign or unknown
+  id both return a **byte-identical 404** — never 403 for a real-but-other-host listing (that would be
+  an id-enumeration oracle). Mirrors the booking cancel pattern. `hostId` is immutable on the aggregate
+  (set at `create()`, never touched by `updateDetails()`). Publish/unpublish are **guarded, not
+  idempotent** (re-publish → `InvalidListingStateException` → 409) — the opposite of S4 `Payment`, and
+  on purpose: no at-least-once delivery forces idempotency here, and guarding catches client bugs.
+- **Contract added:** extended `packages/shared/src/contracts/listing.ts` — `hostListingUpsert`
+  (create+edit, full-replace), `hostListingSummary` (host's own card, includes `status`, drafts
+  included), `hostListingDetail` (= summary **+** `description` + `images`; the lossless prefill source),
+  `hostListingsResponse`; extracted reusable `listingType` / `listingStatus` enums. Money integer minor
+  units (ADR-0005).
+- **Backend (`apps/api`, `inventory` BC):** `Listing` write aggregate (`create` starts **Unpublished**
+  / `reconstitute`, `updateDetails` full-replace, guarded `publish`/`unpublish`; invariants via
+  `Capacity` VO ≥ 1 + `Money` ≥ 0 + non-empty title, immutable `hostId`) — **zero framework/ORM
+  imports** (grep-clean; the pre-existing `@Injectable` `PricingService` is the documented exception).
+  Four command handlers (`Create`/`Update`/`Publish`/`Unpublish`) each with the ownership 404-no-leak
+  gate; CQRS read side `GET /host/listings` + `GET /host/listings/:id` (host-scoped `WHERE`, drafts
+  included, bypasses the domain). `ListingRepositoryPort` + Prisma impl/mapper. Host controller — all
+  routes `JwtCookieGuard` + `RolesGuard` + `@Roles('host')`; `listing-exception.filter` (invalid state
+  → 409, not-found/not-owned → 404, Zod → 400). No migration (the `listing` table already had every
+  column). Seed: `host@harbourstay.test` / `password123` owns all 7 seed listings (6 Published + 1
+  Unpublished) so the dashboard is populated.
+- **Frontend (`apps/web`):** `/host/listings` dashboard (server role-guarded via `requireHost()` —
+  signed-out → `/login?next=`, guest → `/host/forbidden`), `new` + `[id]/edit` pages;
+  `listing-editor-form.tsx` (RHF + `zodResolver`, create+edit via a `mode` prop, **dollars↔minor-units
+  at the display edge**, edit prefills losslessly from `GET /host/listings/:id` incl. drafts);
+  `publish-toggle.tsx` (the intended-fill React primer, heavily commented); cookie-bridge route handlers
+  under `app/api/host/listings/…`; typed `lib/api/host-listings.ts` re-parsing every response with the
+  shared schema; status badge, loading/error/not-found. Consumes `@harbourstay/shared`, no redefined
+  types.
+- **Definition of Done:**
+  - [x] contract shared both ends, no dup type
+  - [x] `tsc --noEmit` clean (api + web); `next build` compiles
+  - [x] `inventory/domain` framework/ORM-free; host reads bypass the domain (CQRS)
+  - [x] RBAC (401 anon / 403 guest) **and** ownership 404-no-leak (foreign id ≡ unknown id) — tested
+        across two live host accounts
+  - [x] listing CRUD + guarded publish/unpublish; full-replace edit **doesn't lose a draft's
+        description** (the contract-gap regression)
+  - [x] both apps run; host create → edit → publish/unpublish works in the browser
+- **Verifier result:** initial **FAIL** then **PASS**. Backend green first pass (52 suites / 295 tests;
+  RBAC, ownership isolation across two hosts, CRUD, draft-edit preservation, minor-units-on-wire,
+  validation all verified by direct execution). Frontend **failed** the headline Playwright journey: the
+  `publish-toggle` left `submitting=true` on success on the false assumption `router.refresh()` remounts
+  the component — it re-renders the server tree but keeps the **same** client instance, so the button
+  stuck disabled reading "Working…" after one toggle (second POST never fired). Fixed (reset
+  `submitting=false` on success; comment rewritten to teach the real lesson) → both Playwright tests
+  green (guest-forbidden + create→edit-draft→publish/unpublish round-trip). *Lesson: a static read
+  accepted the buggy comment's logic; only booting the stack exposed it.*
+- **Contract gap found & closed mid-slice:** the full-replace `PATCH` had no lossless prefill source
+  (`hostListingSummary` lacked `description`/`images`; no host detail endpoint), so editing an
+  Unpublished **draft** would blank those fields on save. Closed end-to-end: added `hostListingDetail`
+  + `GET /host/listings/:id` (ownership 404-no-leak, drafts included) + edit-page prefill from it;
+  Playwright now asserts a draft's description survives the round-trip.
+- **ADRs:** `adr/0012-host-authorization-rbac-role-plus-ownership-404-no-leak.md`.
+- **Deferred to S6b (not S6a scope):** availability-block management (block/unblock date ranges) and
+  the host bookings view (`GET /host/bookings`). **Deferred beyond S6 (stretch):** complex rate *rules*
+  (weekend uplift, LOS discounts — DESIGN.md §Pricing); MVP is a single editable base price. Image
+  **upload** to object storage (the editor takes image URLs/paths as text for now).
+- **Next:** S6b — Availability blocks + host bookings.

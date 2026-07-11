@@ -22,6 +22,19 @@ export const listingSearchQuery = z.object({
 
 export type ListingSearchQuery = z.infer<typeof listingSearchQuery>;
 
+/** Listing kind — mirrors the Prisma `ListingType` enum. MVP ships `stay` only. */
+export const listingType = z.enum(['stay', 'tour']);
+
+export type ListingType = z.infer<typeof listingType>;
+
+/**
+ * Publication state — mirrors the Prisma `ListingStatus` enum. Guest-facing
+ * search only ever returns `Published`; the host dashboard sees both.
+ */
+export const listingStatus = z.enum(['Published', 'Unpublished']);
+
+export type ListingStatus = z.infer<typeof listingStatus>;
+
 /** One search-result card. */
 export const listingSummary = z.object({
   id: z.string().uuid(),
@@ -37,7 +50,7 @@ export type ListingSummary = z.infer<typeof listingSummary>;
 export const listingDetail = listingSummary.extend({
   description: z.string(),
   capacity: z.number().int().positive(),
-  type: z.enum(['stay', 'tour']),
+  type: listingType,
   images: z.array(z.string().url()),
   /**
    * Approximate hint that the listing looks bookable for the queried dates.
@@ -48,3 +61,62 @@ export const listingDetail = listingSummary.extend({
 });
 
 export type ListingDetail = z.infer<typeof listingDetail>;
+
+/**
+ * Contracts for the S6a Host Listings CRUD write side (BC-5). A host creates,
+ * edits, and publishes/unpublishes their OWN listings from the dashboard.
+ */
+
+/**
+ * Request body for BOTH `POST /host/listings` (create) and
+ * `PATCH /host/listings/:id` (full-replace update — PUT-like, so one schema
+ * feeds the aggregate's `updateDetails(...)`). `basePrice` is integer minor
+ * units (cents on the wire — ADR-0005); never floats/dollars.
+ */
+export const hostListingUpsert = z.object({
+  title: z.string().trim().min(1).max(120),
+  description: z.string().max(2000),
+  type: listingType,
+  location: z.string().trim().min(1),
+  capacity: z.number().int().min(1),
+  basePrice: z.number().int().nonnegative(),
+  images: z.array(z.string()).default([]),
+});
+
+export type HostListingUpsert = z.infer<typeof hostListingUpsert>;
+
+/**
+ * One row in the host's own-listings dashboard. Unlike the guest
+ * `listingSummary`, it carries `status` and is NOT filtered to Published.
+ * Also the response shape returned by create / update / publish / unpublish.
+ */
+export const hostListingSummary = z.object({
+  id: z.string().uuid(),
+  title: z.string(),
+  location: z.string(),
+  type: listingType,
+  capacity: z.number().int().positive(),
+  basePrice: z.number().int().nonnegative(),
+  status: listingStatus,
+  createdAt: z.string().datetime(),
+});
+
+export type HostListingSummary = z.infer<typeof hostListingSummary>;
+
+/**
+ * Response for `GET /host/listings/:id` — a host's OWN single listing, carrying
+ * every editable field so the dashboard edit form can prefill losslessly before
+ * a full-replace `PATCH`. A superset of `hostListingSummary` that adds the
+ * upsert-only fields (`description`, `images`), so the two can't drift.
+ */
+export const hostListingDetail = hostListingSummary.extend({
+  description: z.string(),
+  images: z.array(z.string()),
+});
+
+export type HostListingDetail = z.infer<typeof hostListingDetail>;
+
+/** Response for `GET /host/listings` — the host's own listings. */
+export const hostListingsResponse = z.array(hostListingSummary);
+
+export type HostListingsResponse = z.infer<typeof hostListingsResponse>;
