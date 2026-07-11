@@ -99,3 +99,72 @@ export const listingAvailability = z.object({
 });
 
 export type ListingAvailability = z.infer<typeof listingAvailability>;
+
+/**
+ * Contracts for the S5 My Bookings + Cancel slice (BC Reservations).
+ *
+ * A guest lists their bookings (`GET /me/bookings`), opens one
+ * (`GET /bookings/:id`), and cancels within policy (`POST /bookings/:id/cancel`).
+ * Same wire conventions as above: money in MINOR UNITS (cents) as an integer
+ * (ADR-0005); calendar dates as `YYYY-MM-DD` strings; timestamps as ISO-8601.
+ */
+
+/**
+ * Full read model for `GET /bookings/:id`, and the item shape in
+ * `myBookingsResponse`. A superset of `bookingSummary`: it drops the transient
+ * `holdExpiresAt` (relevant only while pending payment) and adds denormalised
+ * display data (`listingTitle`, `currency`), the derived `nights`, the audit
+ * timestamp `createdAt`, and the two cancellation fields — both null unless the
+ * booking has been cancelled.
+ */
+export const bookingDetail = z.object({
+  id: z.string().uuid(),
+  listingId: z.string().uuid(),
+  listingTitle: z.string(),
+  status: bookingStatus,
+  checkIn: z.string().date(),
+  checkOut: z.string().date(),
+  nights: z.number().int().min(1),
+  partySize: z.number().int().positive(),
+  priceSnapshot: z.number().int().nonnegative(),
+  currency: z.string(),
+  createdAt: z.string().datetime(),
+  cancelledAt: z.string().datetime().nullable(),
+  refundAmount: z.number().int().nonnegative().nullable(),
+});
+
+export type BookingDetail = z.infer<typeof bookingDetail>;
+
+/**
+ * Response for `GET /me/bookings`: the current guest's bookings, newest first.
+ * Identity comes from the auth cookie, so there are no query/filter params.
+ * Each item is a full `bookingDetail` — one shape for list and detail.
+ */
+export const myBookingsResponse = z.array(bookingDetail);
+
+export type MyBookingsResponse = z.infer<typeof myBookingsResponse>;
+
+/**
+ * Body for `POST /bookings/:id/cancel`. The booking id is a path param, so the
+ * body is minimal — an optional free-text `reason`. Kept as an object (not a
+ * bare optional) so the cancel contract stays forward-extensible.
+ */
+export const cancelBookingRequest = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
+export type CancelBookingRequest = z.infer<typeof cancelBookingRequest>;
+
+/**
+ * Response for `POST /bookings/:id/cancel`. `status` is always the cancelled
+ * state; `refundAmount` (minor units) is what the confirm dialog reads to show
+ * "refunded $X" per the cancellation policy.
+ */
+export const cancelBookingResponse = z.object({
+  id: z.string().uuid(),
+  status: bookingStatus,
+  cancelledAt: z.string().datetime(),
+  refundAmount: z.number().int().nonnegative(),
+});
+
+export type CancelBookingResponse = z.infer<typeof cancelBookingResponse>;

@@ -3,17 +3,8 @@ import { PartySize } from '@/booking/domain/vo/party-size.vo';
 import { Money } from '@/booking/domain/vo/money.vo';
 import { BookingStatus } from '@/booking/domain/enums/booking-status.enum';
 import { InvalidBookingStateException } from '@/booking/domain/exceptions/invalid-booking-state.exception';
+import type { CancellationOutcome } from '@/booking/domain/policies/cancellation-policy';
 import { randomUUID } from 'node:crypto';
-
-/**
- * Cancellation policy applied at cancel time (its rules originate from the
- * listing). Passed in to `cancel()` — the Booking does not own the rules, it just
- * consults them alongside its own status guard.
- */
-export interface CancellationPolicy {
-  /** True if a booking in `status` may still be cancelled under this policy. */
-  canCancel(status: BookingStatus): boolean;
-}
 
 /** Props to create a brand-new Booking (id/status/createdAt derived here). */
 export interface NewBookingProps {
@@ -38,6 +29,10 @@ export interface BookingSnapshot {
   priceSnapshot: Money;
   holdExpiresAt: Date;
   createdAt: Date;
+  /** Set only for a cancelled booking; null/absent otherwise (S5). */
+  cancelledAt?: Date | null;
+  /** Computed refund in minor units; null/absent unless cancelled (S5). */
+  refundAmount?: number | null;
 }
 
 /**
@@ -57,10 +52,25 @@ export interface BookingSnapshot {
  * - `confirm()` only from PendingPayment.
  * - `complete()` / `markNoShow()` only from Confirmed.
  * - `expire()` only from PendingPayment (the hold TTL elapsed pre-payment).
- * - `cancel()` allowed from PendingPayment or Confirmed, NEVER after Completed;
- *   if a `policy` is passed, it must also permit cancellation from the status.
+ * - `cancel(outcome, now)` allowed from PendingPayment or Confirmed, NEVER after
+ *   Completed; it must ALSO honour the evaluated `outcome` (S5 — see below).
  * - `priceSnapshot` is set once at creation and never mutated afterwards.
  * On a disallowed transition, throw `InvalidBookingStateException(from, attempted)`.
+ *
+ * ─── S5 FILL: cancel() widening ───────────────────────────────────────────────
+ * The chosen signature is `cancel(outcome: CancellationOutcome, now: Date): void`.
+ * The caller (Cancel-Booking handler) evaluates the `CancellationPolicy` and hands
+ * the `outcome` in; the aggregate does NOT own the refund tiers, it just records
+ * the result alongside its own status guard. YOUR job (stubbed below):
+ *   1. keep the status guard — cancel only from PendingPayment | Confirmed, else
+ *      throw `InvalidBookingStateException(status, Cancelled)`;
+ *   2. if `outcome.allowed` is false, throw `InvalidBookingStateException` too
+ *      (the policy forbade it — e.g. inside the 48h window);
+ *   3. on success: set status = Cancelled, record `_cancelledAt = now` and
+ *      `_refundAmount = outcome.refundAmount` (minor units).
+ * The two new getters (`cancelledAt` / `refundAmount`) are mechanical plumbing and
+ * are already wired (they expose the private fields, null until cancelled) so the
+ * mapper/read side compile; only the cancel() DECISION is yours.
  */
 export class Booking {
   private constructor(
@@ -74,6 +84,8 @@ export class Booking {
     private readonly _priceSnapshot: Money,
     private readonly _holdExpiresAt: Date,
     private readonly _createdAt: Date,
+    private _cancelledAt: Date | null,
+    private _refundAmount: number | null,
   ) {}
 
   /**
@@ -95,6 +107,8 @@ export class Booking {
       props.priceSnapshot,
       props.holdExpiresAt,
       createdAt,
+      null,
+      null,
     );
   }
 
@@ -111,6 +125,8 @@ export class Booking {
       snapshot.priceSnapshot,
       snapshot.holdExpiresAt,
       snapshot.createdAt,
+      snapshot.cancelledAt ?? null,
+      snapshot.refundAmount ?? null,
     );
   }
 
@@ -138,8 +154,15 @@ export class Booking {
     this._status = BookingStatus.Completed;
   }
 
-  /** PendingPayment | Confirmed → Cancelled (never after Completed). */
-  cancel(policy?: CancellationPolicy): void {
+  /**
+   * PendingPayment | Confirmed → Cancelled (never after Completed), honouring the
+   * evaluated `outcome`. On success, records `cancelledAt`/`refundAmount`.
+   *
+   * TODO(you): implement per the "S5 FILL" note in the class header and delete the
+   * throw. Guard the status, reject when `!outcome.allowed`, then mutate + record.
+   * Your spec: the `cancel` cases in `booking.model.spec.ts`.
+   */
+  cancel(outcome: CancellationOutcome, now: Date): void {
     if (
       this._status !== BookingStatus.PendingPayment &&
       this._status !== BookingStatus.Confirmed
@@ -150,7 +173,7 @@ export class Booking {
       );
     }
 
-    if (policy && !policy.canCancel(this._status)) {
+    if (!outcome.allowed) {
       throw new InvalidBookingStateException(
         this._status,
         BookingStatus.Cancelled,
@@ -158,6 +181,8 @@ export class Booking {
     }
 
     this._status = BookingStatus.Cancelled;
+    this._cancelledAt = now;
+    this._refundAmount = outcome.refundAmount;
   }
 
   /** PendingPayment → Expired (hold TTL elapsed before payment). */
@@ -221,5 +246,15 @@ export class Booking {
 
   get createdAt(): Date {
     return new Date(this._createdAt);
+  }
+
+  /** The moment cancel() ran, or null if the booking was never cancelled (S5). */
+  get cancelledAt(): Date | null {
+    return this._cancelledAt ? new Date(this._cancelledAt) : null;
+  }
+
+  /** Computed refund in minor units, or null if never cancelled (S5). */
+  get refundAmount(): number | null {
+    return this._refundAmount;
   }
 }

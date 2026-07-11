@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 
 // Protected + per-request: read the live session on every load, never cache.
@@ -30,6 +31,14 @@ export default async function AccountPage() {
           <dd className="font-mono text-xs text-gray-600">{user.id}</dd>
         </dl>
       </section>
+
+      <Link
+        href="/account/bookings"
+        data-testid="account-bookings-link"
+        className="w-fit rounded-md bg-gray-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900 focus-visible:ring-offset-2"
+      >
+        Your bookings
+      </Link>
     </main>
   );
 }

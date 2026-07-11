@@ -13,12 +13,12 @@
 | S3 Availability + Booking Hold | P2 | ☑ done | reserve → Booking(PendingPayment) + Hold in one txn; overbooking prevented by Postgres `EXCLUDE` (proven under live concurrency); **Ken wrote the Booking domain + state machine**; 172 api tests + 3 Playwright green |
 | S4 Payment Saga | P3 | ☑ done | Stripe test-mode PaymentIntent → idempotent webhook → `BookingCheckoutSaga` confirms booking + commits Hold → Transactional Outbox → email; **Ken wrote the Payment domain + the saga**; browser payment (`4242…`) flips the page to Confirmed; 211 api tests green. **cut line** |
 | **Deploy (cut line)** | §12 | ☑ done | **live on AWS**, on a private custom domain — web (Amplify SSR) → api (ALB → ECS Fargate) → RDS Postgres 16. Real Stripe test-card payment: webhook `200` → outbox relay delivered `BookingConfirmed` **1s later**, exactly once. |
-| S5 My bookings + cancel | M5 | ☐ | |
+| S5 My bookings + cancel | M5 | ☑ done | `GET /me/bookings` + detail; policy-aware cancel (`Booking.cancel(outcome, now)` + `hold.release()` + `BookingCancelled` outbox in one txn); refund **computed, not issued**. **Ken wrote the CancellationPolicy VO + `cancel()`**; the command handler + React dialog were Claude-written (opt-out). 238 api tests + Playwright cancel journey green. |
 | S6 Host dashboard | P4 | ☐ | |
 | S7 Hardening | P5 | ☐ | |
 
-Branch: `main` (deploy work merged; `deploy-aws` merged in).
-**Next up: S5 — My bookings + cancel** (guest booking list + cancellation flow). Depends on S4 (done).
+Branch: `s5-cancel` (off `main`; not yet committed at time of writing).
+**Next up: S6 — Host dashboard** (listing CRUD + availability/rate mgmt + host bookings, RBAC). Depends on S1/S2. Next slice defaults back to Ken writing the handlers.
 Deployed on a **private custom domain** (hostnames deliberately not recorded here): web = AWS Amplify Hosting
 (SSR/WEB_COMPUTE) · api = ALB + ACM → ECS Fargate, 1 task · db = **RDS PostgreSQL 16.14** `db.t4g.micro`, private.
 Runbook: [docs/DEPLOY.md](../DEPLOY.md) · topology rationale: `adr/0010-aws-deploy-ecs-fargate-behind-alb.md`.
@@ -333,3 +333,72 @@ CI: `.github/workflows/ci.yml` (runs on push to a GitHub remote; local branch fo
 - **Deferred:** infrastructure is click-ops — codify it (CDK/Terraform) in S7, along with autoscaling >1 task,
   RDS Multi-AZ, outbox retention/dead-letter, and a real mailer (SES) behind the existing `MailerPort`.
 - **Next:** S5 — My bookings + cancel.
+
+---
+
+## S5 — My Bookings + Cancel
+
+- **Shipped:** a signed-in guest sees their bookings (`GET /me/bookings`), opens one
+  (`/account/bookings/:id`), and cancels within policy — the booking flips to `Cancelled`, its
+  `Hold` is released, a refund is computed and recorded, and a `BookingCancelled` notification
+  fires. A too-late / wrong-state cancel is refused with a clear message. BC-1 Booking, releasing
+  BC-2 inventory, reusing the S4 Outbox.
+- **The headline shape:** cancel is the **saga compensation from the other direction** — the S4
+  `onPaymentFailed` pattern, triggered by a guest instead of Stripe. In one `tx.run(...)`:
+  `booking.cancel(outcome, now)` + `hold.release()` (guarded to releasable states) + save both +
+  `outbox.enqueue(BookingCancelled)`. See **ADR-0011**.
+- **The domain decision (ADR-0011):** cancellation modelled as a **policy VO evaluated at cancel
+  time** — `CancellationPolicy.evaluate(status, checkIn, now, priceSnapshot) → { allowed,
+  refundAmount, reason? }` (pure, deterministic — `now` injected). Tiers: PendingPayment → 0;
+  Confirmed ≥7d → 100%; 2–7d → 50% floored; <48h/after → rejected; terminal → rejected. **Refund is
+  computed and recorded, never issued to Stripe** (settlement out of scope, PRD §2/§6). The aggregate
+  keeps its **own** status guard — it never delegates state-machine integrity to the policy's boolean.
+- **Contract added:** extended `packages/shared/src/contracts/booking.ts` — `bookingDetail`,
+  `myBookingsResponse` (= `BookingDetail[]`), `cancelBookingRequest` (optional `reason`),
+  `cancelBookingResponse`. Money integer minor units (ADR-0005); reuses `bookingStatus`.
+- **Backend (`apps/api`, scaffold):** migration `20260711120000_s5_booking_cancel` (nullable
+  `cancelledAt`, `refundAmount`); CQRS read side `GET /me/bookings` + widened `GET /bookings/:id`
+  (listing-join projection → `BookingDetail`, no domain reconstitution); `POST /bookings/:id/cancel`
+  (`@HttpCode(200)`, ownership 404-no-leak, `InvalidBookingStateException` → 409);
+  `CancellationPolicyProviderPort` seam (single `standard()` today, per-listing later);
+  `BookingCancelled` event + TestMailer notification handler; module wiring.
+- **User implemented (fill plan):** **Ken wrote the two domain pieces** —
+  `booking/domain/policies/cancellation-policy.ts` (`evaluate()` tiered refund, status-first
+  branching, deterministic `now`, `Math.floor` to never over-refund) and the widened
+  `Booking.cancel(outcome, now)` in `booking.model.ts` (allow-list `PendingPayment | Confirmed`,
+  throw on any other status, throw on `!outcome.allowed`, record `cancelledAt` + `refundAmount`).
+  Review found **one must-fix on `cancel()`** — the guard only blocked `Completed`, delegating the
+  rest of its state-machine integrity to the policy; Ken fixed it to a positive allow-list, corrected
+  a wrong exception type (plain `Error` → `InvalidBookingStateException`, which is what maps to 409
+  not 500), and **added the regression test that was missing** (an *allowed* outcome on an `Expired`
+  booking must still throw — red against the old guard, green now). Coaching lessons landed: an
+  aggregate protects its own invariants regardless of what a collaborator hands it; the exception type
+  IS the HTTP contract; the fix and its test are one unit of work.
+- **Fill-file OPT-OUT (recorded):** Ken asked Claude to write the **`CancelBooking` command handler**
+  (`cancel-booking.command.handler.ts` — his first command handler) and the **React cancel dialog**
+  (`components/cancel-booking-dialog.tsx` — no React experience yet). Both written by Claude, heavily
+  commented as teaching artifacts, and reviewed by the engineers (handler must-fix: guard `hold.release()`
+  to releasable states — fixed; dialog must-fix: real modal a11y — focus-on-open, Escape, focus-restore —
+  fixed). Ken still wrote the meat of the slice (the policy + the aggregate). **Next slice defaults back
+  to Ken writing the handlers**; S6 (host dashboard) is frontend-heavy — plan a gentler React on-ramp so
+  the frontend learning goal isn't repeatedly opted out of.
+- **Frontend (`apps/web`, scaffold):** my-bookings list + `/account/bookings/[id]` detail (a **separate
+  durable route** from the transient `/bookings/[id]` pay flow, which still needs `holdExpiresAt`);
+  cookie-forwarding `POST /api/bookings/[id]/cancel` bridge; status badge; loading/error/not-found.
+- **Definition of Done:**
+  - [x] contract shared both ends, no dup type
+  - [x] `tsc --noEmit` clean (api + web); `next build` compiles
+  - [x] domain framework/ORM-free; cross-aggregate cancel+release+outbox in ONE transaction
+  - [x] policy boundaries + aggregate guard unit-tested (incl. the allowed-outcome-on-terminal regression)
+  - [x] both apps run; browser cancel journey works unaided; 401/404/409 error paths
+- **Verifier result:** PASS. 238 api tests / 43 suites (incl. Testcontainers `cancel-booking.integration`);
+  live: `GET /me/bookings` `[]`→1; reserve→PendingPayment; cancel → `{status: Cancelled, refundAmount: 0}`,
+  DB shows Cancelled + `cancelledAt` + hold `released` + one relayed `BookingCancelled` outbox row + mailer
+  line; 401 (no cookie) / 404 (unknown + other-guest no-leak) / 409 (re-cancel). Playwright cancel journey
+  2/2 (the too-late-409 and 50%/100% tiers need a Confirmed near-check-in booking — covered by unit +
+  integration tests). One finding fixed: cancel returned 201 → `@HttpCode(200)` to match the contract.
+- **ADRs:** `adr/0011-cancellation-policy-vo-refund-computed-not-issued.md`.
+- **Deferred (not S5 scope):** per-listing cancellation policies (port seam is in place); a real Stripe
+  refund when settlement enters scope; host-initiated cancellation (S6); a full focus-trap on the dialog
+  (basic a11y done; hardening in S7).
+- **Next:** S6 — Host dashboard.

@@ -27,6 +27,8 @@ export class BookingMapper {
       priceSnapshot: Money.reconstitute(row.priceSnapshot, 'USD'),
       holdExpiresAt: row.holdExpiresAt,
       createdAt: row.createdAt,
+      cancelledAt: row.cancelledAt,
+      refundAmount: row.refundAmount,
     });
   }
 
@@ -43,6 +45,8 @@ export class BookingMapper {
       priceSnapshot: booking.priceSnapshot.amount,
       holdExpiresAt: booking.holdExpiresAt,
       createdAt: booking.createdAt,
+      cancelledAt: booking.cancelledAt,
+      refundAmount: booking.refundAmount,
     };
   }
 }
