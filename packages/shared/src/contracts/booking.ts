@@ -168,3 +168,39 @@ export const cancelBookingResponse = z.object({
 });
 
 export type CancelBookingResponse = z.infer<typeof cancelBookingResponse>;
+
+/**
+ * Contracts for the S6b Host Bookings read side (BC Reservations). A host lists
+ * bookings across ALL their listings (`GET /host/bookings`). Guest identity is
+ * kept minimal — `guestId` only, no email/PII — so this stays inside
+ * Reservations and never reaches into Identity. Same wire conventions: money in
+ * MINOR UNITS (cents) as an integer (ADR-0005); dates as `YYYY-MM-DD` strings;
+ * timestamps as ISO-8601.
+ */
+
+/**
+ * One booking as the HOST sees it, across their listings. Denormalises
+ * `listingTitle` for display; `totalPrice` is the frozen total in minor units.
+ */
+export const hostBookingSummary = z.object({
+  id: z.string().uuid(),
+  listingId: z.string().uuid(),
+  listingTitle: z.string(),
+  guestId: z.string().uuid(),
+  checkIn: z.string().date(),
+  checkOut: z.string().date(),
+  partySize: z.number().int().min(1),
+  status: bookingStatus,
+  totalPrice: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+});
+
+export type HostBookingSummary = z.infer<typeof hostBookingSummary>;
+
+/**
+ * Response for `GET /host/bookings`: bookings across the host's listings. Host
+ * identity comes from the auth cookie, so there are no query/filter params.
+ */
+export const hostBookingsResponse = z.array(hostBookingSummary);
+
+export type HostBookingsResponse = z.infer<typeof hostBookingsResponse>;

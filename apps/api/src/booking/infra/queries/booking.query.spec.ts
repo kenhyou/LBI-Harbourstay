@@ -23,12 +23,16 @@ jest.setTimeout(180_000);
 const GUEST = '11111111-1111-4111-8111-111111111111';
 const OTHER_GUEST = '99999999-9999-4999-8999-999999999999';
 
-async function seedListing(prisma: PrismaClient, title = 'Harbour Loft'): Promise<string> {
+async function seedListing(
+  prisma: PrismaClient,
+  title = 'Harbour Loft',
+  hostId: string = randomUUID(),
+): Promise<string> {
   const id = randomUUID();
   await prisma.listing.create({
     data: {
       id,
-      hostId: randomUUID(),
+      hostId,
       title,
       description: 'x',
       location: 'Harbour',
@@ -170,5 +174,44 @@ describe('BookingQuery (integration, real Postgres — read projection)', () => 
 
   it('returns an empty array for a guest with no bookings', async () => {
     expect(await query.listForGuest(randomUUID())).toEqual([]);
+  });
+
+  describe('listForHost (S6b) — host-scoped across their listings', () => {
+    it('returns only bookings on the host\'s own listings; host A never sees host B\'s', async () => {
+      const hostA = randomUUID();
+      const hostB = randomUUID();
+      const listingA = await seedListing(prisma, 'A Cabin', hostA);
+      const listingB = await seedListing(prisma, 'B Cabin', hostB);
+
+      const bookingOnA = await seedBooking(prisma, listingA, {
+        guestId: randomUUID(),
+        createdAt: new Date('2026-06-10T00:00:00.000Z'),
+      });
+      // A second, newer booking on A to assert ordering.
+      const newerOnA = await seedBooking(prisma, listingA, {
+        guestId: randomUUID(),
+        createdAt: new Date('2026-06-20T00:00:00.000Z'),
+      });
+      // A booking on B must NEVER appear in A's host view.
+      await seedBooking(prisma, listingB, { guestId: randomUUID() });
+
+      const forA = await query.listForHost(hostA);
+
+      expect(forA.map((b) => b.id)).toEqual([newerOnA, bookingOnA]); // newest-first
+      expect(forA.every((b) => b.listingId === listingA)).toBe(true);
+      expect(forA[0]).toMatchObject({
+        listingTitle: 'A Cabin',
+        totalPrice: 33_000, // frozen priceSnapshot, minor units
+        partySize: 2,
+        status: 'PendingPayment',
+        checkIn: '2026-07-01',
+        checkOut: '2026-07-04',
+      });
+      expect(forA[0].guestId).toEqual(expect.any(String));
+    });
+
+    it('returns an empty array for a host with no listings (or no bookings)', async () => {
+      expect(await query.listForHost(randomUUID())).toEqual([]);
+    });
   });
 });

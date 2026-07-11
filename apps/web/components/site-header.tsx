@@ -31,13 +31,22 @@ export async function SiteHeader() {
           {user ? (
             <>
               {user.role === 'host' && (
-                <Link
-                  href="/host/listings"
-                  data-testid="header-host-link"
-                  className="text-gray-600 transition hover:text-gray-900"
-                >
-                  Host
-                </Link>
+                <>
+                  <Link
+                    href="/host/listings"
+                    data-testid="header-host-link"
+                    className="text-gray-600 transition hover:text-gray-900"
+                  >
+                    Host
+                  </Link>
+                  <Link
+                    href="/host/bookings"
+                    data-testid="header-host-bookings-link"
+                    className="text-gray-600 transition hover:text-gray-900"
+                  >
+                    Bookings
+                  </Link>
+                </>
               )}
               <Link
                 href="/account"

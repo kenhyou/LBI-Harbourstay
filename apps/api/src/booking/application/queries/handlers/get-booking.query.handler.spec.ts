@@ -30,6 +30,7 @@ describe('GetBookingHandler', () => {
     const port: jest.Mocked<BookingQueryPort> = {
       findDetailByIdForGuest: jest.fn(),
       listForGuest: jest.fn(),
+      listForHost: jest.fn(),
     };
     return { port, handler: new GetBookingHandler(port) };
   }

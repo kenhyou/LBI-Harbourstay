@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -24,12 +25,15 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import {
+  availabilityBlockRequest,
   hostListingUpsert,
   type AuthUser,
+  type AvailabilityBlockRequest,
   type HostListingDetail,
   type HostListingSummary,
   type HostListingUpsert,
   type HostListingsResponse,
+  type ListingBlocksResponse,
 } from '@harbourstay/shared';
 import { ZodValidationPipe } from '@/shared/pipes/zod-validation.pipe';
 import { HostListingService } from '@/inventory/application/services/host-listing.service';
@@ -158,5 +162,64 @@ export class HostListingController {
     @Param('id') id: string,
   ): Promise<HostListingSummary> {
     return this.listings.unpublish(user.id, id);
+  }
+
+  // ── Availability blocks (S6b) ────────────────────────────────────────────────
+  // All three routes inherit the class-level guards (host RBAC) and the ownership
+  // 404-no-leak (enforced in the handlers/query). The block list is the response of
+  // every mutation too, so the client re-syncs in one round trip.
+
+  @Get(':id/blocks')
+  @ApiCookieAuth()
+  @ApiOperation({ summary: "List the host's blocks on one of their own listings." })
+  @ApiParam({ name: 'id', description: 'Listing UUID' })
+  @ApiOkResponse({ description: 'The listing\'s blocks (calendar order).' })
+  @ApiNotFoundResponse({ description: 'No such listing owned by the current host.' })
+  @ApiUnauthorizedResponse({ description: 'Not authenticated.' })
+  @ApiForbiddenResponse({ description: 'Authenticated but not a host.' })
+  listBlocks(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+  ): Promise<ListingBlocksResponse> {
+    return this.listings.listBlocks(user.id, id);
+  }
+
+  @Post(':id/blocks')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Block a date range on one of the host\'s own listings.' })
+  @ApiParam({ name: 'id', description: 'Listing UUID' })
+  @ApiCreatedResponse({ description: 'The updated block list.' })
+  @ApiConflictResponse({ description: 'The range overlaps an existing block.' })
+  @ApiNotFoundResponse({ description: 'No such listing owned by the current host.' })
+  @ApiUnauthorizedResponse({ description: 'Not authenticated.' })
+  @ApiForbiddenResponse({ description: 'Authenticated but not a host.' })
+  addBlock(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    // Scope the Zod pipe to the body only (as elsewhere — a method-level pipe would
+    // also try to validate the injected @CurrentUser against the schema).
+    @Body(new ZodValidationPipe(availabilityBlockRequest))
+    body: AvailabilityBlockRequest,
+  ): Promise<ListingBlocksResponse> {
+    return this.listings.addBlock(user.id, id, body);
+  }
+
+  @Delete(':id/blocks/:blockId')
+  @HttpCode(HttpStatus.OK)
+  @ApiCookieAuth()
+  @ApiOperation({ summary: 'Remove one block from the host\'s own listing.' })
+  @ApiParam({ name: 'id', description: 'Listing UUID' })
+  @ApiParam({ name: 'blockId', description: 'Block UUID' })
+  @ApiOkResponse({ description: 'The updated block list.' })
+  @ApiNotFoundResponse({ description: 'No such listing (not owned) or no such block.' })
+  @ApiUnauthorizedResponse({ description: 'Not authenticated.' })
+  @ApiForbiddenResponse({ description: 'Authenticated but not a host.' })
+  removeBlock(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('blockId') blockId: string,
+  ): Promise<ListingBlocksResponse> {
+    return this.listings.removeBlock(user.id, id, blockId);
   }
 }

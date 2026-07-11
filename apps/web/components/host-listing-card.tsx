@@ -42,13 +42,22 @@ export function HostListingCard({ listing }: { listing: HostListingSummary }) {
       </div>
 
       <div className="flex items-center justify-between border-t border-gray-100 pt-3">
-        <Link
-          href={`/host/listings/${listing.id}/edit`}
-          data-testid="host-listing-edit"
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900"
-        >
-          Edit
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/host/listings/${listing.id}/edit`}
+            data-testid="host-listing-edit"
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900"
+          >
+            Edit
+          </Link>
+          <Link
+            href={`/host/listings/${listing.id}/availability`}
+            data-testid="host-listing-availability"
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900"
+          >
+            Availability
+          </Link>
+        </div>
         <PublishToggle listing={listing} />
       </div>
     </article>

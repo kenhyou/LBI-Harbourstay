@@ -1,8 +1,20 @@
 import { Listing, type NewListingProps } from '@/inventory/domain/models/listing.model';
 import { ListingType } from '@/inventory/domain/enums/listing-type.enum';
 import { ListingStatus } from '@/inventory/domain/enums/listing-status.enum';
+import { DateRange } from '@/inventory/domain/vo/date-range.vo';
 import { InvalidListingDetailsException } from '@/inventory/domain/exceptions/invalid-listing-details.exception';
 import { InvalidListingStateException } from '@/inventory/domain/exceptions/invalid-listing-state.exception';
+import { InvalidDateRangeException } from '@/inventory/domain/exceptions/invalid-date-range.exception';
+import { OverlappingBlockException } from '@/inventory/domain/exceptions/overlapping-block.exception';
+import { BlockNotFoundException } from '@/inventory/domain/exceptions/block-not-found.exception';
+
+/** A half-open `[in, out)` inventory range from two `YYYY-MM-DD` strings. */
+function range(checkIn: string, checkOut: string): DateRange {
+  return DateRange.create(
+    new Date(`${checkIn}T00:00:00.000Z`),
+    new Date(`${checkOut}T00:00:00.000Z`),
+  );
+}
 
 const HOST = 'host-aaaa-0000-0000-000000000001';
 
@@ -157,6 +169,92 @@ describe('Listing (aggregate)', () => {
     });
   });
 
+  describe('block / unblock (availability blocks — S6b)', () => {
+    it('a new listing starts with no blocks', () => {
+      expect(Listing.create(validProps()).blocks).toEqual([]);
+    });
+
+    it('adds a block over a valid range and returns the new child entity', () => {
+      const listing = Listing.create(validProps());
+
+      const block = listing.block(range('2026-07-01', '2026-07-05'));
+
+      expect(block.id).toEqual(expect.any(String));
+      expect(listing.blocks).toHaveLength(1);
+      expect(listing.blocks[0].id).toBe(block.id);
+      expect(listing.blocks[0].range.checkIn).toEqual(
+        new Date('2026-07-01T00:00:00.000Z'),
+      );
+    });
+
+    it('allows two non-overlapping blocks', () => {
+      const listing = Listing.create(validProps());
+      listing.block(range('2026-07-01', '2026-07-05'));
+      listing.block(range('2026-07-10', '2026-07-12'));
+      expect(listing.blocks).toHaveLength(2);
+    });
+
+    it('allows a back-to-back block (half-open: touching ranges do NOT overlap)', () => {
+      const listing = Listing.create(validProps());
+      listing.block(range('2026-07-01', '2026-07-05'));
+      // Starts exactly where the first ends — no overlap under [in, out).
+      listing.block(range('2026-07-05', '2026-07-08'));
+      expect(listing.blocks).toHaveLength(2);
+    });
+
+    it('rejects a block that overlaps an existing block (and does not add it)', () => {
+      const listing = Listing.create(validProps());
+      listing.block(range('2026-07-01', '2026-07-05'));
+
+      expect(() => listing.block(range('2026-07-04', '2026-07-08'))).toThrow(
+        OverlappingBlockException,
+      );
+      // The failed block was not appended.
+      expect(listing.blocks).toHaveLength(1);
+    });
+
+    it('rejects an inverted/zero-night range at the DateRange VO (before the aggregate)', () => {
+      // The range guard lives in the VO, so an invalid range can't even be built
+      // to hand to block().
+      expect(() => range('2026-07-05', '2026-07-05')).toThrow(
+        InvalidDateRangeException,
+      );
+    });
+
+    it('removes a block by id', () => {
+      const listing = Listing.create(validProps());
+      const block = listing.block(range('2026-07-01', '2026-07-05'));
+
+      listing.unblock(block.id);
+
+      expect(listing.blocks).toEqual([]);
+    });
+
+    it('after unblocking, the freed range can be blocked again (no ghost overlap)', () => {
+      const listing = Listing.create(validProps());
+      const first = listing.block(range('2026-07-01', '2026-07-05'));
+      listing.unblock(first.id);
+      // Would have thrown OverlappingBlockException if the old block lingered.
+      expect(() => listing.block(range('2026-07-01', '2026-07-05'))).not.toThrow();
+    });
+
+    it('throws BlockNotFoundException when unblocking an unknown id', () => {
+      const listing = Listing.create(validProps());
+      expect(() => listing.unblock('no-such-block')).toThrow(
+        BlockNotFoundException,
+      );
+    });
+
+    it('does not let a caller add a block by mutating the getter result', () => {
+      const listing = Listing.create(validProps());
+      listing.blocks.push(
+        // @ts-expect-error — deliberately abusing the returned copy in the test
+        { id: 'x', range: range('2026-07-01', '2026-07-05') },
+      );
+      expect(listing.blocks).toEqual([]); // internal collection untouched
+    });
+  });
+
   describe('reconstitute', () => {
     it('faithfully restores a persisted snapshot (round-trips getters)', () => {
       const createdAt = new Date('2026-01-02T03:04:05.000Z');
@@ -198,6 +296,35 @@ describe('Listing (aggregate)', () => {
       });
       listing.unpublish();
       expect(listing.status).toBe(ListingStatus.Unpublished);
+    });
+
+    it('rehydrates persisted blocks and enforces overlap against them', () => {
+      const listing = Listing.reconstitute({
+        id: '55555555-5555-4555-8555-555555555555',
+        hostId: HOST,
+        title: 'Blocked Villa',
+        description: 'x',
+        type: ListingType.Stay,
+        location: 'Wellington',
+        capacity: 2,
+        basePrice: 10_000,
+        images: [],
+        status: ListingStatus.Published,
+        createdAt: new Date(),
+        blocks: [
+          {
+            id: 'block-1',
+            checkIn: new Date('2026-08-01T00:00:00.000Z'),
+            checkOut: new Date('2026-08-10T00:00:00.000Z'),
+          },
+        ],
+      });
+
+      expect(listing.blocks).toHaveLength(1);
+      // A new block overlapping the rehydrated one is still rejected.
+      expect(() => listing.block(range('2026-08-05', '2026-08-07'))).toThrow(
+        OverlappingBlockException,
+      );
     });
   });
 });

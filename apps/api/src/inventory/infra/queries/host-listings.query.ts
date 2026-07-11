@@ -2,11 +2,17 @@ import { Injectable } from '@nestjs/common';
 import type {
   HostListingDetail,
   HostListingSummary,
+  ListingBlocksResponse,
   ListingStatus as ContractListingStatus,
   ListingType as ContractListingType,
 } from '@harbourstay/shared';
 import { PrismaService } from '@/infra/prisma/prisma.service';
 import { HostListingsQueryPort } from '@/inventory/application/ports/host-listings.query.port';
+
+/** Format a `@db.Date` (UTC-midnight) as the contract's `YYYY-MM-DD`. */
+function toDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
 
 /**
  * CQRS read impl for the host dashboard. Projects Prisma `listing` rows owned by
@@ -90,5 +96,33 @@ export class HostListingsQuery extends HostListingsQueryPort {
       status: row.status as unknown as ContractListingStatus,
       createdAt: row.createdAt.toISOString(),
     };
+  }
+
+  async listBlocksForHost(
+    listingId: string,
+    hostId: string,
+  ): Promise<ListingBlocksResponse | null> {
+    // Ownership FIRST: confirm the listing exists AND is this host's. If not, we
+    // return null (→ 404 no-leak) — we must NOT fall through to reading blocks,
+    // which would leak "the listing exists" via an empty-vs-null distinction.
+    const listing = await this.prisma.listing.findFirst({
+      where: { id: listingId, hostId },
+      select: { id: true },
+    });
+    if (!listing) {
+      return null;
+    }
+
+    const rows = await this.prisma.availabilityBlock.findMany({
+      where: { listingId, isBlocked: true },
+      orderBy: { checkIn: 'asc' },
+      select: { id: true, checkIn: true, checkOut: true },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      checkIn: toDateString(row.checkIn),
+      checkOut: toDateString(row.checkOut),
+    }));
   }
 }

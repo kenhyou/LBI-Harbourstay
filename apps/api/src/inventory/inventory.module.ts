@@ -9,10 +9,13 @@ import { HostListingService } from '@/inventory/application/services/host-listin
 import { GetAvailabilityHandler } from '@/inventory/application/queries/handlers/get-availability.query.handler';
 import { GetHostListingsHandler } from '@/inventory/application/queries/handlers/get-host-listings.query.handler';
 import { GetHostListingDetailHandler } from '@/inventory/application/queries/handlers/get-host-listing-detail.query.handler';
+import { GetListingBlocksHandler } from '@/inventory/application/queries/handlers/get-listing-blocks.query.handler';
 import { CreateListingHandler } from '@/inventory/application/commands/handlers/create-listing.command.handler';
 import { UpdateListingHandler } from '@/inventory/application/commands/handlers/update-listing.command.handler';
 import { PublishListingHandler } from '@/inventory/application/commands/handlers/publish-listing.command.handler';
 import { UnpublishListingHandler } from '@/inventory/application/commands/handlers/unpublish-listing.command.handler';
+import { BlockDatesHandler } from '@/inventory/application/commands/handlers/block-dates.command.handler';
+import { UnblockDatesHandler } from '@/inventory/application/commands/handlers/unblock-dates.command.handler';
 import { PricingService } from '@/inventory/domain/services/pricing.service';
 import { HoldRepositoryPort } from '@/inventory/application/ports/hold.repository.port';
 import { ListingInventoryPort } from '@/inventory/application/ports/listing-inventory.port';
@@ -30,11 +33,14 @@ const commandHandlers = [
   UpdateListingHandler,
   PublishListingHandler,
   UnpublishListingHandler,
+  BlockDatesHandler,
+  UnblockDatesHandler,
 ];
 const queryHandlers = [
   GetAvailabilityHandler,
   GetHostListingsHandler,
   GetHostListingDetailHandler,
+  GetListingBlocksHandler,
 ];
 
 /**
